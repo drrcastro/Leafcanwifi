@@ -9,10 +9,11 @@ esp32:
     type: arduino
 
 wifi:
-  ssid: "networkname"
-  password: "wifipassword"
+  ssid: "YourSSID"
+  password: "YourPassword"
+  use_address: 192.168.1.changeip
   manual_ip:
-    static_ip: 192.168.1.your_ip
+    static_ip: 192.168.1.changeip
     gateway: 192.168.1.1
     subnet: 255.255.255.0
   ap:
@@ -22,13 +23,68 @@ wifi:
 logger:
   logs:
     canbus: INFO
+    charge: INFO
 
 web_server:
   port: 80
 
+api:
+  reboot_timeout: 0s
+
 ota:
   - platform: esphome
     password: "your_ota_password"
+
+globals:
+  - id: is_charging
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: plug_connected
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: soc_at_charge_start
+    type: float
+    restore_value: no
+    initial_value: "-1.0"
+
+  - id: charge_energy_wh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: last_current
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: last_voltage
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: last_energy_update
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+  - id: charging_session_active
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: battery_capacity_wh
+    type: float
+    restore_value: yes
+    initial_value: "34000.0"
+
+  - id: last_written_capacity_wh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
 
 canbus:
   - platform: esp32_can
@@ -43,101 +99,97 @@ canbus:
         then:
           - lambda: |-
               if (x.size() >= 2) {
-                uint8_t gear_shift = (x[0] & 0xF0) >> 4;
-                uint8_t car_status = x[1];
+                uint8_t gear = (x[0] >> 4) & 0x0F;
+                if (gear == 4) id(gear_shift_sensor).publish_state("Drive/B");
+                else if (gear == 3) id(gear_shift_sensor).publish_state("Neutral");
+                else if (gear == 2) id(gear_shift_sensor).publish_state("Reverse");
+                else if (gear == 0) id(gear_shift_sensor).publish_state("Park");
+                else id(gear_shift_sensor).publish_state("Unknown");
 
-                if (gear_shift == 4) {
-                  id(gear_shift_sensor).publish_state("Drive/B");
-                } else if (gear_shift == 3) {
-                  id(gear_shift_sensor).publish_state("Neutral");
-                } else if (gear_shift == 2) {
-                  id(gear_shift_sensor).publish_state("Reverse");
-                } else if (gear_shift == 0) {
-                  id(gear_shift_sensor).publish_state("Park");
-                } else {
-                  id(gear_shift_sensor).publish_state("Unknown");
-                }
-
-                if (car_status == 0x40) {
-                  id(car_status_sensor).publish_state("ON");
-                } else if (car_status == 0x80) {
-                  id(car_status_sensor).publish_state("OFF");
-                } else {
-                  id(car_status_sensor).publish_state("Unknown");
-                }
+                uint8_t car_on = (x[1] >> 5) & 0x07;
+                if (car_on == 4) id(car_status_sensor).publish_state("OFF");
+                else if (car_on == 8) id(car_status_sensor).publish_state("ON");
+                else id(car_status_sensor).publish_state("Unknown");
               }
 
-      - can_id: 0x60d
+      - can_id: 0x55B
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 2) {
-                bool trunk_open = x[0] & (1 << 7);
-                bool rear_right_door_open = x[0] & (1 << 6);
-                bool rear_left_door_open = x[0] & (1 << 5);
-                bool driver_door_open = x[0] & (1 << 4);
-                bool passenger_door_open = x[0] & (1 << 3);
-                uint8_t light_mode = (x[0] >> 1) & 0x03;
-                bool fog_lights = x[0] & (1 << 0);
-                bool high_beam = x[1] & (1 << 7);
-                bool right_indicator = x[1] & (1 << 6);
-                bool left_indicator = x[1] & (1 << 5);
-                uint8_t car_state = (x[1] >> 1) & 0x03;
+                uint16_t raw = ((x[0] << 8) | x[1]) >> 6;
+                float soc = raw / 10.0;
+                id(lbc_soc_sensor).publish_state(soc);
 
-                id(trunk_open_sensor).publish_state(trunk_open);
-                id(rear_right_door_open_sensor).publish_state(rear_right_door_open);
-                id(rear_left_door_open_sensor).publish_state(rear_left_door_open);
-                id(driver_door_open_sensor).publish_state(driver_door_open);
-                id(passenger_door_open_sensor).publish_state(passenger_door_open);
-                id(light_mode_sensor).publish_state(light_mode);
-                id(fog_lights_sensor).publish_state(fog_lights);
-                id(high_beam_sensor).publish_state(high_beam);
-                id(right_indicator_sensor).publish_state(right_indicator);
-                id(left_indicator_sensor).publish_state(left_indicator);
-                id(car_state_sensor).publish_state(car_state);
-              }
+                // Actively charging = plug connected AND current flowing
+                bool actively_charging = id(plug_connected) && id(last_current) > 0.5;
+                id(is_charging) = actively_charging;
 
-      - can_id: 0x763
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 7) {
-                uint8_t parameter_id = x[3];
+                if (actively_charging) {
+                  uint32_t now = millis();
 
-                if (parameter_id == 0x01) {
-                  uint32_t odometer = (x[4] << 16) | (x[5] << 8) | x[6];
-                  id(odometer_sensor).publish_state(odometer);
-                } else if (parameter_id == 0x25 || parameter_id == 0x26 || parameter_id == 0x27 || parameter_id == 0x28) {
-                  float pressure = (x[4] * 0.068947576) * 100 / 4;
-                  if (parameter_id == 0x25) id(tp_fr_sensor).publish_state(pressure);
-                  else if (parameter_id == 0x26) id(tp_fl_sensor).publish_state(pressure);
-                  else if (parameter_id == 0x27) id(tp_rr_sensor).publish_state(pressure);
-                  else if (parameter_id == 0x28) id(tp_rl_sensor).publish_state(pressure);
-                }
-              }
+                  // Start session
+                  if (!id(charging_session_active)) {
+                    id(charging_session_active) = true;
+                    id(soc_at_charge_start) = soc;
+                    id(charge_energy_wh) = 0.0;
+                    id(last_energy_update) = now;
+                    ESP_LOGI("charge", "Session started at SOC %.1f%%", soc);
+                  }
 
-      - can_id: 0x79A
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 5) {
-                uint8_t parameter_id = x[3];
+                  // Catch reconnect with no reference SOC yet
+                  if (id(soc_at_charge_start) < 0.0) {
+                    id(soc_at_charge_start) = soc;
+                    id(last_energy_update) = now;
+                    ESP_LOGI("charge", "Session SOC reference set at %.1f%%", soc);
+                  }
 
-                if (parameter_id == 0x34) {
-                  id(plug_state_sensor).publish_state(x[4]);
-                } else if (parameter_id == 0x4E) {
-                  id(charge_mode_sensor).publish_state(x[4]);
-                } else if (parameter_id == 0x36) {
-                  uint32_t obc_out_power = ((x[4] << 8) | x[5]) * 100;
-                  id(obc_out_power_sensor).publish_state(obc_out_power);
-                } else if (parameter_id == 0x03) {
-                  float voltage = x[4] * 0.08;
-                  id(bat_12v_voltage_sensor).publish_state(voltage);
-                } else if (parameter_id == 0x83 && x.size() >= 6) {
-                  int16_t current_temp = (x[4] << 8) | x[5];
-                  if (current_temp & 32768) current_temp |= -65536;
-                  float current = current_temp / 256.0;
-                  id(bat_12v_current_sensor).publish_state(current);
+                  // Accumulate energy
+                  if (id(last_energy_update) > 0 && id(last_current) > 0.1 && id(last_voltage) > 100.0) {
+                    float dt_hours = (now - id(last_energy_update)) / 3600000.0;
+                    float power_w = id(last_current) * id(last_voltage);
+                    id(charge_energy_wh) += power_w * dt_hours;
+                    id(last_energy_update) = now;
+                  }
+
+                  // Calculate capacity after 5% SOC rise
+                  float soc_rise = soc - id(soc_at_charge_start);
+                  if (soc_rise >= 5.0 && id(charge_energy_wh) > 100.0) {
+                    float calculated = (id(charge_energy_wh) / soc_rise) * 100.0;
+                    if (calculated >= 20000.0 && calculated <= 45000.0) {
+                      id(battery_capacity_wh) = calculated;
+                      id(estimated_capacity_sensor).publish_state(calculated / 1000.0);
+                      ESP_LOGI("charge", "Capacity estimate: %.0f Wh", calculated);
+                      if (abs(calculated - id(last_written_capacity_wh)) > 500.0) {
+                        id(last_written_capacity_wh) = calculated;
+                        ESP_LOGI("charge", "Capacity written to flash: %.0f Wh", calculated);
+                      }
+                    }
+                  }
+
+                  // Time to 80% and 100%
+                  float power_w = id(last_current) * id(last_voltage);
+                  if (power_w > 100.0) {
+                    float capacity = id(battery_capacity_wh);
+                    float wh_to_80 = ((80.0 - soc) / 100.0) * capacity;
+                    float wh_to_100 = ((100.0 - soc) / 100.0) * capacity;
+                    if (wh_to_80 > 0) {
+                      id(time_to_80_sensor).publish_state((wh_to_80 / power_w) * 60.0);
+                    } else {
+                      id(time_to_80_sensor).publish_state(0);
+                    }
+                    id(time_to_100_sensor).publish_state((wh_to_100 / power_w) * 60.0);
+                  }
+
+                } else {
+                  // Not actively charging
+                  if (id(charging_session_active)) {
+                    id(charging_session_active) = false;
+                    id(soc_at_charge_start) = -1.0;
+                    ESP_LOGI("charge", "Session ended");
+                  }
+                  id(time_to_80_sensor).publish_state(-1);
+                  id(time_to_100_sensor).publish_state(-1);
                 }
               }
 
@@ -146,147 +198,92 @@ canbus:
         then:
           - lambda: |-
               if (x.size() >= 7) {
-                float ambient_temp_c = (x[6] / 2.0) - 40;
-                id(ambient_temp_sensor).publish_state(ambient_temp_c);
+                float temp = (x[6] * 0.5) - 40.5;
+                id(ambient_temp_sensor).publish_state(temp);
               }
 
-      - can_id: 0x55B
+      - can_id: 0x1DB
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 2) {
-                uint16_t raw_lbc_soc = ((x[0] << 8) | x[1]) >> 6;
-                float lbc_soc = raw_lbc_soc / 10.0;
-                id(lbc_soc_sensor).publish_state(lbc_soc);
+              if (x.size() >= 6) {
+                int16_t raw_current = ((x[0] << 3) | (x[1] >> 5)) & 0x7FF;
+                if (raw_current & 0x400) raw_current |= 0xF800;
+                float current = raw_current * 0.5;
+                id(last_current) = current;
+                id(battery_current_sensor).publish_state(current);
+
+                uint16_t raw_voltage = ((x[2] << 2) | (x[3] >> 6)) & 0x3FF;
+                float voltage = raw_voltage * 0.5;
+                id(last_voltage) = voltage;
+                id(battery_voltage_sensor).publish_state(voltage);
               }
 
-binary_sensor:
-  - platform: template
-    name: "Trunk Open"
-    id: trunk_open_sensor
-    icon: "mdi:car-back"
+      - can_id: 0x1DC
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 4) {
+                uint16_t raw_discharge = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+                float discharge = raw_discharge * 0.25;
+                if (isnan(id(discharge_power_limit_sensor).state) ||
+                    abs(discharge - id(discharge_power_limit_sensor).state) > 1.0) {
+                  id(discharge_power_limit_sensor).publish_state(discharge);
+                }
 
-  - platform: template
-    name: "Rear Right Door Open"
-    id: rear_right_door_open_sensor
-    icon: "mdi:car-door"
+                uint16_t raw_charge = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
+                float charge_limit = raw_charge * 0.25;
+                if (isnan(id(charge_power_limit_sensor).state) ||
+                    abs(charge_limit - id(charge_power_limit_sensor).state) > 1.0) {
+                  id(charge_power_limit_sensor).publish_state(charge_limit);
+                }
+              }
 
-  - platform: template
-    name: "Rear Left Door Open"
-    id: rear_left_door_open_sensor
-    icon: "mdi:car-door"
+      - can_id: 0x5BC
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 6) {
+                uint16_t gids = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+                id(gids_sensor).publish_state(gids);
 
-  - platform: template
-    name: "Driver Door Open"
-    id: driver_door_open_sensor
-    icon: "mdi:car-door"
+                uint8_t soh = (x[4] >> 1) & 0x7F;
+                id(soh_sensor).publish_state(soh);
+              }
 
-  - platform: template
-    name: "Passenger Door Open"
-    id: passenger_door_open_sensor
-    icon: "mdi:car-door"
+      - can_id: 0x1D4
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 7) {
+                uint8_t b6 = x[6];
+                if (b6 == 0xE0) {
+                  id(plug_connected) = true;
+                  // Charge status text depends on actual current
+                  if (id(last_current) > 0.5) {
+                    id(charge_status_sensor).publish_state("Charging");
+                  } else {
+                    id(charge_status_sensor).publish_state("Plugged In");
+                  }
+                } else if (b6 == 0x8C) {
+                  id(plug_connected) = false;
+                  id(charge_status_sensor).publish_state("Interrupted");
+                } else {
+                  id(plug_connected) = false;
+                  id(charge_status_sensor).publish_state("Not Plugged In");
+                }
+              }
 
-  - platform: template
-    name: "Fog Lights"
-    id: fog_lights_sensor
-    icon: "mdi:car-light-fog"
-
-  - platform: template
-    name: "High Beam"
-    id: high_beam_sensor
-    icon: "mdi:car-light-high"
-
-  - platform: template
-    name: "Right Indicator"
-    id: right_indicator_sensor
-    icon: "mdi:car-right"
-
-  - platform: template
-    name: "Left Indicator"
-    id: left_indicator_sensor
-    icon: "mdi:car-left"
+      - can_id: 0x1F2
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 3) {
+                bool connector = (x[2] >> 1) & 0x01;
+                id(connector_sensor).publish_state(connector);
+              }
 
 sensor:
-  - platform: template
-    name: "Light Mode"
-    id: light_mode_sensor
-    unit_of_measurement: ""
-
-  - platform: template
-    name: "Car State"
-    id: car_state_sensor
-    unit_of_measurement: ""
-
-  - platform: template
-    name: "Odometer"
-    id: odometer_sensor
-    unit_of_measurement: "km"
-    accuracy_decimals: 0
-    icon: "mdi:counter"
-
-  - platform: template
-    name: "TP Front Right (kPa)"
-    id: tp_fr_sensor
-    unit_of_measurement: "kPa"
-    accuracy_decimals: 2
-    icon: "mdi:car-tire-alert"
-
-  - platform: template
-    name: "TP Front Left (kPa)"
-    id: tp_fl_sensor
-    unit_of_measurement: "kPa"
-    accuracy_decimals: 2
-    icon: "mdi:car-tire-alert"
-
-  - platform: template
-    name: "TP Rear Right (kPa)"
-    id: tp_rr_sensor
-    unit_of_measurement: "kPa"
-    accuracy_decimals: 2
-    icon: "mdi:car-tire-alert"
-
-  - platform: template
-    name: "TP Rear Left (kPa)"
-    id: tp_rl_sensor
-    unit_of_measurement: "kPa"
-    accuracy_decimals: 2
-    icon: "mdi:car-tire-alert"
-
-  - platform: template
-    name: "OBC Out Power (W)"
-    id: obc_out_power_sensor
-    unit_of_measurement: "W"
-    accuracy_decimals: 0
-    icon: "mdi:car-electric"
-
-  - platform: template
-    name: "Plug State"
-    id: plug_state_sensor
-    unit_of_measurement: ""
-    accuracy_decimals: 0
-    icon: "mdi:power-plug"
-
-  - platform: template
-    name: "Charge Mode"
-    id: charge_mode_sensor
-    unit_of_measurement: ""
-    accuracy_decimals: 0
-    icon: "mdi:ev-station"
-
-  - platform: template
-    name: "Bat 12V Voltage (V)"
-    id: bat_12v_voltage_sensor
-    unit_of_measurement: "V"
-    accuracy_decimals: 2
-    icon: "mdi:car-battery"
-
-  - platform: template
-    name: "Bat 12V Current (A)"
-    id: bat_12v_current_sensor
-    unit_of_measurement: "A"
-    accuracy_decimals: 3
-    icon: "mdi:current-dc"
-
   - platform: template
     name: "LBC SOC"
     id: lbc_soc_sensor
@@ -295,11 +292,80 @@ sensor:
     icon: "mdi:battery"
 
   - platform: template
+    name: "Battery Voltage"
+    id: battery_voltage_sensor
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    icon: "mdi:flash"
+
+  - platform: template
+    name: "Battery Current"
+    id: battery_current_sensor
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    icon: "mdi:current-dc"
+
+  - platform: template
+    name: "Discharge Power Limit"
+    id: discharge_power_limit_sensor
+    unit_of_measurement: "kW"
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-down"
+
+  - platform: template
+    name: "Charge Power Limit"
+    id: charge_power_limit_sensor
+    unit_of_measurement: "kW"
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-up"
+
+  - platform: template
+    name: "GIDS"
+    id: gids_sensor
+    unit_of_measurement: "GIDs"
+    accuracy_decimals: 0
+    icon: "mdi:car-battery"
+
+  - platform: template
+    name: "State of Health"
+    id: soh_sensor
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:heart-pulse"
+
+  - platform: template
     name: "Ambient Temperature"
     id: ambient_temp_sensor
     unit_of_measurement: "°C"
     accuracy_decimals: 1
     icon: "mdi:thermometer"
+
+  - platform: template
+    name: "Time to 80%"
+    id: time_to_80_sensor
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    icon: "mdi:clock-fast"
+
+  - platform: template
+    name: "Time to 100%"
+    id: time_to_100_sensor
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    icon: "mdi:clock-end"
+
+  - platform: template
+    name: "Estimated Capacity"
+    id: estimated_capacity_sensor
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    icon: "mdi:battery-high"
+
+binary_sensor:
+  - platform: template
+    name: "Connector"
+    id: connector_sensor
+    icon: "mdi:power-plug"
 
 text_sensor:
   - platform: template
@@ -312,16 +378,19 @@ text_sensor:
     id: car_status_sensor
     icon: "mdi:car-info"
 
-interval:
-  - interval: 300s
-    then:
-      - script.execute: send_can_queries
+  - platform: template
+    name: "Charge Status"
+    id: charge_status_sensor
+    icon: "mdi:ev-station"
 
-script:
-  - id: send_can_queries
-    mode: queued
-    then:
-      - logger.log: "Sending CAN queries"
+button:
+  - platform: restart
+    name: "Leaf CAN Restart"
+
+  - platform: template
+    name: "Wake Car"
+    icon: "mdi:car-connected"
+    on_press:
       - repeat:
           count: 5
           then:
@@ -330,57 +399,3 @@ script:
                 can_id: 0x56E
                 use_extended_id: false
             - delay: 50ms
-      - delay: 1000ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x0E, 0x01, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x743
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x0E, 0x25, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x743
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x0E, 0x26, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x743
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x0E, 0x27, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x743
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x0E, 0x28, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x743
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x12, 0x36, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x12, 0x34, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x11, 0x4E, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x11, 0x03, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
-      - delay: 100ms
-      - canbus.send:
-          data: [0x03, 0x22, 0x11, 0x83, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
-
-button:
-  - platform: restart
-    name: "Leaf CAN Restart"
