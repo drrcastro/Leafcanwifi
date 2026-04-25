@@ -1,6 +1,8 @@
 # Leafcanwifi
 Connecting a Nissan leaf to a wifi network to check soc
 
+It will connect to your wifi after you insert the desired ip, ssdi and pass... or create a network for you to connect.
+
 Using esphome, based on the idea of this page:
 https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/
 
