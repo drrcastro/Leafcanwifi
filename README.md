@@ -19,5 +19,6 @@ gateway pinout:
 https://nissanleaf.carhackingwiki.com/index.php/CAN_Gateway
 
 With the help of ai this was built without the need of home assistant so you can check soc while charging and without the need to go to the car and press the key on.
+Homeassistant integration should work anyway.
 
 And it works, power consumption is 50ma +-, feel free to make it better as i am not a programmer.
