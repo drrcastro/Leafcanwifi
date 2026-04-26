@@ -360,6 +360,11 @@ sensor:
     unit_of_measurement: "kWh"
     accuracy_decimals: 2
     icon: "mdi:battery-high"
+  
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    icon: "mdi:wifi"
 
 binary_sensor:
   - platform: template
