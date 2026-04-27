@@ -9,21 +9,33 @@ esp32:
     type: arduino
 
 wifi:
-  ssid: "YourSSID"
-  password: "YourPassword"
-  use_address: 192.168.1.changeip
+  ssid: "yourssid"
+  password: "yourpass"
+  use_address: 192.168.1.deviceip
   manual_ip:
-    static_ip: 192.168.1.changeip
+    static_ip: 192.168.1.deviceip
     gateway: 192.168.1.1
     subnet: 255.255.255.0
   ap:
     ssid: "leaf-can-fallback"
     password: "fallback123"
+  power_save_mode: none
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Lisbon"
+    on_time_sync:
+      then:
+        - lambda: |-
+            ESP_LOGI("time", "Time synced: %02d:%02d", id(sntp_time).now().hour, id(sntp_time).now().minute);
 
 logger:
   logs:
     canbus: INFO
     charge: INFO
+    sleep: INFO
+    time: INFO
 
 web_server:
   port: 80
@@ -34,6 +46,10 @@ api:
 ota:
   - platform: esphome
     password: "your_ota_password"
+
+deep_sleep:
+  id: deep_sleep_handler
+  sleep_duration: 5min
 
 globals:
   - id: is_charging
@@ -46,16 +62,6 @@ globals:
     restore_value: no
     initial_value: "false"
 
-  - id: soc_at_charge_start
-    type: float
-    restore_value: no
-    initial_value: "-1.0"
-
-  - id: charge_energy_wh
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
   - id: last_current
     type: float
     restore_value: no
@@ -66,25 +72,20 @@ globals:
     restore_value: no
     initial_value: "0.0"
 
-  - id: last_energy_update
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: charging_session_active
-    type: bool
-    restore_value: no
-    initial_value: "false"
-
-  - id: battery_capacity_wh
-    type: float
-    restore_value: yes
-    initial_value: "34000.0"
-
-  - id: last_written_capacity_wh
+  - id: full_capacity_wh
     type: float
     restore_value: no
     initial_value: "0.0"
+
+  - id: remaining_energy_wh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: charging_session_active_flag
+    type: bool
+    restore_value: no
+    initial_value: "false"
 
 canbus:
   - platform: esp32_can
@@ -121,58 +122,21 @@ canbus:
                 float soc = raw / 10.0;
                 id(lbc_soc_sensor).publish_state(soc);
 
-                // Actively charging = plug connected AND current flowing
                 bool actively_charging = id(plug_connected) && id(last_current) > 0.5;
                 id(is_charging) = actively_charging;
 
                 if (actively_charging) {
-                  uint32_t now = millis();
-
-                  // Start session
-                  if (!id(charging_session_active)) {
-                    id(charging_session_active) = true;
-                    id(soc_at_charge_start) = soc;
-                    id(charge_energy_wh) = 0.0;
-                    id(last_energy_update) = now;
+                  if (!id(charging_session_active_flag)) {
+                    id(charging_session_active_flag) = true;
                     ESP_LOGI("charge", "Session started at SOC %.1f%%", soc);
                   }
 
-                  // Catch reconnect with no reference SOC yet
-                  if (id(soc_at_charge_start) < 0.0) {
-                    id(soc_at_charge_start) = soc;
-                    id(last_energy_update) = now;
-                    ESP_LOGI("charge", "Session SOC reference set at %.1f%%", soc);
-                  }
-
-                  // Accumulate energy
-                  if (id(last_energy_update) > 0 && id(last_current) > 0.1 && id(last_voltage) > 100.0) {
-                    float dt_hours = (now - id(last_energy_update)) / 3600000.0;
-                    float power_w = id(last_current) * id(last_voltage);
-                    id(charge_energy_wh) += power_w * dt_hours;
-                    id(last_energy_update) = now;
-                  }
-
-                  // Calculate capacity after 5% SOC rise
-                  float soc_rise = soc - id(soc_at_charge_start);
-                  if (soc_rise >= 5.0 && id(charge_energy_wh) > 100.0) {
-                    float calculated = (id(charge_energy_wh) / soc_rise) * 100.0;
-                    if (calculated >= 20000.0 && calculated <= 45000.0) {
-                      id(battery_capacity_wh) = calculated;
-                      id(estimated_capacity_sensor).publish_state(calculated / 1000.0);
-                      ESP_LOGI("charge", "Capacity estimate: %.0f Wh", calculated);
-                      if (abs(calculated - id(last_written_capacity_wh)) > 500.0) {
-                        id(last_written_capacity_wh) = calculated;
-                        ESP_LOGI("charge", "Capacity written to flash: %.0f Wh", calculated);
-                      }
-                    }
-                  }
-
-                  // Time to 80% and 100%
+                  // Time to 80% and 100% using real remaining energy from 0x59E
                   float power_w = id(last_current) * id(last_voltage);
-                  if (power_w > 100.0) {
-                    float capacity = id(battery_capacity_wh);
-                    float wh_to_80 = ((80.0 - soc) / 100.0) * capacity;
-                    float wh_to_100 = ((100.0 - soc) / 100.0) * capacity;
+                  if (power_w > 100.0 && id(full_capacity_wh) > 0.0 && id(remaining_energy_wh) > 0.0) {
+                    float wh_to_80 = (id(full_capacity_wh) * 0.8) - id(remaining_energy_wh);
+                    float wh_to_100 = id(full_capacity_wh) - id(remaining_energy_wh);
+
                     if (wh_to_80 > 0) {
                       id(time_to_80_sensor).publish_state((wh_to_80 / power_w) * 60.0);
                     } else {
@@ -182,10 +146,8 @@ canbus:
                   }
 
                 } else {
-                  // Not actively charging
-                  if (id(charging_session_active)) {
-                    id(charging_session_active) = false;
-                    id(soc_at_charge_start) = -1.0;
+                  if (id(charging_session_active_flag)) {
+                    id(charging_session_active_flag) = false;
                     ESP_LOGI("charge", "Session ended");
                   }
                   id(time_to_80_sensor).publish_state(-1);
@@ -250,6 +212,30 @@ canbus:
                 uint8_t soh = (x[4] >> 1) & 0x7F;
                 id(soh_sensor).publish_state(soh);
               }
+      
+      - can_id: 0x59E
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 8) {
+                // LB_Full_Capacity_for_QC: bit 20, 9bit Motorola, scale 100
+                uint16_t raw_full = ((x[2] & 0x1F) << 4) | (x[3] >> 4);
+                float full_wh = raw_full * 100.0;
+
+                // LB_Remain_Capacity_for_QC: bit 27, 9bit Motorola, scale 100
+                uint16_t raw_remain = ((x[3] & 0x0F) << 5) | (x[4] >> 3);
+                float remain_wh = raw_remain * 100.0;
+
+                if (full_wh >= 10000.0 && full_wh <= 70000.0) {
+                  id(full_capacity_wh) = full_wh;
+                  id(full_capacity_sensor).publish_state(full_wh / 1000.0);
+                }
+
+                if (remain_wh >= 0.0 && remain_wh <= 70000.0) {
+                  id(remaining_energy_wh) = remain_wh;
+                  id(remaining_energy_sensor).publish_state(remain_wh / 1000.0);
+                }
+              }
 
       - can_id: 0x1D4
         use_extended_id: false
@@ -259,7 +245,6 @@ canbus:
                 uint8_t b6 = x[6];
                 if (b6 == 0xE0) {
                   id(plug_connected) = true;
-                  // Charge status text depends on actual current
                   if (id(last_current) > 0.5) {
                     id(charge_status_sensor).publish_state("Charging");
                   } else {
@@ -282,6 +267,25 @@ canbus:
                 bool connector = (x[2] >> 1) & 0x01;
                 id(connector_sensor).publish_state(connector);
               }
+
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              auto now = id(sntp_time).now();
+              if (!now.is_valid()) return false;
+              int hour = now.hour;
+              bool in_quiet_hours = (hour >= 0 && hour < 7);
+              if (in_quiet_hours && !id(is_charging)) {
+                ESP_LOGI("sleep", "Quiet hours (%02d:xx), not charging — sleeping 5min", hour);
+              }
+              return in_quiet_hours && !id(is_charging);
+          then:
+            - deep_sleep.enter:
+                id: deep_sleep_handler
+                sleep_duration: 5min
 
 sensor:
   - platform: template
@@ -341,6 +345,20 @@ sensor:
     icon: "mdi:thermometer"
 
   - platform: template
+    name: "Remaining Energy"
+    id: remaining_energy_sensor
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    icon: "mdi:battery-charging"
+
+  - platform: template
+    name: "Full Capacity"
+    id: full_capacity_sensor
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    icon: "mdi:battery-high"
+
+  - platform: template
     name: "Time to 80%"
     id: time_to_80_sensor
     unit_of_measurement: "min"
@@ -354,13 +372,6 @@ sensor:
     accuracy_decimals: 0
     icon: "mdi:clock-end"
 
-  - platform: template
-    name: "Estimated Capacity"
-    id: estimated_capacity_sensor
-    unit_of_measurement: "kWh"
-    accuracy_decimals: 2
-    icon: "mdi:battery-high"
-  
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
