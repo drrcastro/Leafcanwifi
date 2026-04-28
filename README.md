@@ -13,8 +13,11 @@ https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/
 You need the following hardware:
 
 esp32-c3 (cheaper)
+
 SN65HVD230 VP230 CAN Board Network Transceiver
+
 dc-dc converter
+
 24pin gateway extention cable or just jam the wires in like i did LOL
 
 
