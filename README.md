@@ -5,7 +5,7 @@ ze0 and aze0 are untested, all versions available. Older cars could be connected
 
 It will connect to your wifi after you insert the desired ip, ssdi and pass... or create a network for you to connect.
 
-![Screenshot](https://github.com/CrAzYDr1veR/Leafcanwifi/raw/main/files/screenshot.jpg)
+![Screenshot](https://github.com/CrAzYDr1veR/Leafcanwifi/raw/main/files/screenshot.png)
 
 Using esphome, based on the idea of this page:
 https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/
