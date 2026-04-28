@@ -1,6 +1,8 @@
 # Leafcanwifi
 Connecting a Nissan leaf to a wifi network to check soc
 
+ze0 and aze0 are untested, all versions available. Older cars could be connected next to the driver footwell.
+
 It will connect to your wifi after you insert the desired ip, ssdi and pass... or create a network for you to connect.
 
 Using esphome, based on the idea of this page:
