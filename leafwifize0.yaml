@@ -1,0 +1,465 @@
+esphome:
+  name: leafwifize0
+  friendly_name: Leaf CAN Monitor ZE0
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: ESP32C3
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "YourSSID"
+  password: "YourPassword"
+  use_address: 192.168.1.deviceip
+  manual_ip:
+    static_ip: 192.168.1.deviceip
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+  ap:
+    ssid: "leafze0-fallback"
+    password: "fallback123"
+  power_save_mode: none
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Lisbon"
+    on_time_sync:
+      then:
+        - lambda: |-
+            ESP_LOGI("time", "Time synced: %02d:%02d", id(sntp_time).now().hour, id(sntp_time).now().minute);
+
+logger:
+  logs:
+    canbus: INFO
+    charge: INFO
+    sleep: INFO
+    time: INFO
+
+web_server:
+  port: 80
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: "your_ota_password"
+
+deep_sleep:
+  id: deep_sleep_handler
+  sleep_duration: 5min
+
+globals:
+  - id: is_charging
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: plug_connected
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: last_current
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: last_voltage
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: full_capacity_wh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: remaining_energy_wh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: charging_session_active_flag
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+canbus:
+  - platform: esp32_can
+    tx_pin: GPIO4
+    rx_pin: GPIO5
+    can_id: 999
+    bit_rate: 500KBPS
+
+    on_frame:
+      # Gear shift and car on/off status
+      - can_id: 0x11A
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 2) {
+                uint8_t gear = (x[0] >> 4) & 0x0F;
+                if (gear == 4) id(gear_shift_sensor).publish_state("Drive/B");
+                else if (gear == 3) id(gear_shift_sensor).publish_state("Neutral");
+                else if (gear == 2) id(gear_shift_sensor).publish_state("Reverse");
+                else if (gear == 0) id(gear_shift_sensor).publish_state("Park");
+                else id(gear_shift_sensor).publish_state("Unknown");
+
+                uint8_t car_on = (x[1] >> 5) & 0x07;
+                if (car_on == 4) id(car_status_sensor).publish_state("OFF");
+                else if (car_on == 8) id(car_status_sensor).publish_state("ON");
+                else id(car_status_sensor).publish_state("Unknown");
+              }
+
+      # LBC SOC — 0.1% resolution
+      - can_id: 0x55B
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 2) {
+                uint16_t raw = ((x[0] << 8) | x[1]) >> 6;
+                float soc = raw / 10.0;
+                id(lbc_soc_sensor).publish_state(soc);
+
+                bool actively_charging = id(plug_connected) && id(last_current) > 0.5;
+                id(is_charging) = actively_charging;
+
+                if (actively_charging) {
+                  if (!id(charging_session_active_flag)) {
+                    id(charging_session_active_flag) = true;
+                    ESP_LOGI("charge", "Session started at SOC %.1f%%", soc);
+                  }
+
+                  float power_w = id(last_current) * id(last_voltage);
+                  if (power_w > 100.0 && id(full_capacity_wh) > 0.0 && id(remaining_energy_wh) > 0.0) {
+                    float wh_to_80 = (id(full_capacity_wh) * 0.8) - id(remaining_energy_wh);
+                    float wh_to_100 = id(full_capacity_wh) - id(remaining_energy_wh);
+                    if (wh_to_80 > 0) {
+                      id(time_to_80_sensor).publish_state((wh_to_80 / power_w) * 60.0);
+                    } else {
+                      id(time_to_80_sensor).publish_state(0);
+                    }
+                    id(time_to_100_sensor).publish_state((wh_to_100 / power_w) * 60.0);
+                  }
+
+                } else {
+                  if (id(charging_session_active_flag)) {
+                    id(charging_session_active_flag) = false;
+                    ESP_LOGI("charge", "Session ended");
+                  }
+                  id(time_to_80_sensor).publish_state(-1);
+                  id(time_to_100_sensor).publish_state(-1);
+                }
+              }
+
+      # Ambient temperature — ZE0 offset is -40 (not -40.5)
+      - can_id: 0x54C
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 7) {
+                float temp = (x[6] * 0.5) - 40.0;
+                id(ambient_temp_sensor).publish_state(temp);
+              }
+
+      # Battery current and voltage
+      - can_id: 0x1DB
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 6) {
+                int16_t raw_current = ((x[0] << 3) | (x[1] >> 5)) & 0x7FF;
+                if (raw_current & 0x400) raw_current |= 0xF800;
+                float current = raw_current * 0.5;
+                id(last_current) = current;
+                id(battery_current_sensor).publish_state(current);
+
+                uint16_t raw_voltage = ((x[2] << 2) | (x[3] >> 6)) & 0x3FF;
+                float voltage = raw_voltage * 0.5;
+                id(last_voltage) = voltage;
+                id(battery_voltage_sensor).publish_state(voltage);
+              }
+
+      # Charge and discharge power limits
+      - can_id: 0x1DC
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 4) {
+                uint16_t raw_discharge = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+                float discharge = raw_discharge * 0.25;
+                if (isnan(id(discharge_power_limit_sensor).state) ||
+                    abs(discharge - id(discharge_power_limit_sensor).state) > 1.0) {
+                  id(discharge_power_limit_sensor).publish_state(discharge);
+                }
+
+                uint16_t raw_charge = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
+                float charge_limit = raw_charge * 0.25;
+                if (isnan(id(charge_power_limit_sensor).state) ||
+                    abs(charge_limit - id(charge_power_limit_sensor).state) > 1.0) {
+                  id(charge_power_limit_sensor).publish_state(charge_limit);
+                }
+              }
+
+      # GIDS, full capacity, SOH and battery temperature
+      # ZE0: full capacity from LB_New_Full_Capacity in 0x5BC
+      # Formula: raw * 80 + 250 = Wh
+      - can_id: 0x5BC
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 8) {
+                // GIDS: bit 7, 10bit big-endian
+                uint16_t gids = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+                id(gids_sensor).publish_state(gids);
+
+                // Remaining energy from GIDS: 1 GID = 80Wh
+                float remain_wh = gids * 80.0;
+                id(remaining_energy_wh) = remain_wh;
+                id(remaining_energy_sensor).publish_state(remain_wh / 1000.0);
+
+                // LB_New_Full_Capacity: bit 13, 10bit big-endian, scale (80,250)
+                uint16_t raw_full = ((x[1] & 0x3F) << 4) | (x[2] >> 4);
+                float full_wh = (raw_full * 80.0) + 250.0;
+                if (full_wh >= 15000.0 && full_wh <= 35000.0) {
+                  id(full_capacity_wh) = full_wh;
+                  id(full_capacity_sensor).publish_state(full_wh / 1000.0);
+                }
+
+                // SOH: bit 33, 7bit little-endian
+                uint8_t soh = (x[4] >> 1) & 0x7F;
+                id(soh_sensor).publish_state(soh);
+
+                // Battery temperature: bit 24, 8bit, scale (1,-40)
+                float batt_temp = x[3] - 40.0;
+                id(battery_temp_sensor).publish_state(batt_temp);
+              }
+
+      # Charge status — plug detection
+      - can_id: 0x1D4
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 7) {
+                uint8_t b6 = x[6];
+                if (b6 == 0xE0) {
+                  id(plug_connected) = true;
+                  if (id(last_current) > 0.5) {
+                    id(charge_status_sensor).publish_state("Charging");
+                  } else {
+                    id(charge_status_sensor).publish_state("Plugged In");
+                  }
+                } else if (b6 == 0x8C) {
+                  id(plug_connected) = false;
+                  id(charge_status_sensor).publish_state("Interrupted");
+                } else {
+                  id(plug_connected) = false;
+                  id(charge_status_sensor).publish_state("Not Plugged In");
+                }
+              }
+
+      # OBC charger output power and AC voltage (ZE0 uses 0x380)
+      - can_id: 0x380
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 7) {
+                // Charger_Output_Power: bit 16, 9bit big-endian, scale 0.1
+                uint16_t raw_power = ((x[2] << 1) | (x[3] >> 7)) & 0x1FF;
+                float power_kw = raw_power * 0.1;
+                id(obc_power_sensor).publish_state(power_kw);
+
+                // AC_Voltage: bit 42, 9bit big-endian, scale (0.5, 70)
+                uint16_t raw_voltage = ((x[5] << 1) | (x[6] >> 7)) & 0x1FF;
+                float ac_voltage = (raw_voltage * 0.5) + 70.0;
+                id(ac_voltage_sensor).publish_state(ac_voltage);
+              }
+
+      # Connector detection from 0x1F2
+      - can_id: 0x1F2
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 3) {
+                bool connector = (x[2] >> 1) & 0x01;
+                id(connector_sensor).publish_state(connector);
+              }
+
+      # Wake button frame
+      - can_id: 0x56E
+        use_extended_id: false
+        then:
+          - lambda: |-
+              ESP_LOGI("wake", "Wake frame received");
+
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              auto now = id(sntp_time).now();
+              if (!now.is_valid()) return false;
+              int hour = now.hour;
+              bool in_quiet_hours = (hour >= 0 && hour < 7);
+              if (in_quiet_hours && !id(is_charging)) {
+                ESP_LOGI("sleep", "Quiet hours (%02d:xx), not charging — sleeping 5min", hour);
+              }
+              return in_quiet_hours && !id(is_charging);
+          then:
+            - deep_sleep.enter:
+                id: deep_sleep_handler
+                sleep_duration: 5min
+
+sensor:
+  - platform: template
+    name: "LBC SOC"
+    id: lbc_soc_sensor
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    icon: "mdi:battery"
+
+  - platform: template
+    name: "Battery Voltage"
+    id: battery_voltage_sensor
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    icon: "mdi:flash"
+
+  - platform: template
+    name: "Battery Current"
+    id: battery_current_sensor
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    icon: "mdi:current-dc"
+
+  - platform: template
+    name: "Battery Temperature"
+    id: battery_temp_sensor
+    unit_of_measurement: "°C"
+    accuracy_decimals: 0
+    icon: "mdi:thermometer"
+
+  - platform: template
+    name: "Discharge Power Limit"
+    id: discharge_power_limit_sensor
+    unit_of_measurement: "kW"
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-down"
+
+  - platform: template
+    name: "Charge Power Limit"
+    id: charge_power_limit_sensor
+    unit_of_measurement: "kW"
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-up"
+
+  - platform: template
+    name: "GIDS"
+    id: gids_sensor
+    unit_of_measurement: "GIDs"
+    accuracy_decimals: 0
+    icon: "mdi:car-battery"
+
+  - platform: template
+    name: "State of Health"
+    id: soh_sensor
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:heart-pulse"
+
+  - platform: template
+    name: "Ambient Temperature"
+    id: ambient_temp_sensor
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+
+  - platform: template
+    name: "Remaining Energy"
+    id: remaining_energy_sensor
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    icon: "mdi:battery-charging"
+
+  - platform: template
+    name: "Full Capacity"
+    id: full_capacity_sensor
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    icon: "mdi:battery-high"
+
+  - platform: template
+    name: "OBC Charge Power"
+    id: obc_power_sensor
+    unit_of_measurement: "kW"
+    accuracy_decimals: 1
+    icon: "mdi:ev-station"
+
+  - platform: template
+    name: "AC Voltage"
+    id: ac_voltage_sensor
+    unit_of_measurement: "V"
+    accuracy_decimals: 0
+    icon: "mdi:lightning-bolt"
+
+  - platform: template
+    name: "Time to 80%"
+    id: time_to_80_sensor
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    icon: "mdi:clock-fast"
+
+  - platform: template
+    name: "Time to 100%"
+    id: time_to_100_sensor
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    icon: "mdi:clock-end"
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    icon: "mdi:wifi"
+
+binary_sensor:
+  - platform: template
+    name: "Connector"
+    id: connector_sensor
+    icon: "mdi:power-plug"
+
+text_sensor:
+  - platform: template
+    name: "Gear Shift"
+    id: gear_shift_sensor
+    icon: "mdi:car-shift-pattern"
+
+  - platform: template
+    name: "Car Status"
+    id: car_status_sensor
+    icon: "mdi:car-info"
+
+  - platform: template
+    name: "Charge Status"
+    id: charge_status_sensor
+    icon: "mdi:ev-station"
+
+button:
+  - platform: restart
+    name: "Leaf CAN Restart"
+
+  - platform: template
+    name: "Wake Car"
+    icon: "mdi:car-connected"
+    on_press:
+      - repeat:
+          count: 5
+          then:
+            - canbus.send:
+                data: [0x00]
+                can_id: 0x56E
+                use_extended_id: false
+            - delay: 50ms
