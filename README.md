@@ -20,7 +20,12 @@ This integration has been fine-tuned to solve several known quirks of the Nissan
 * **❄️ Climate Control Decoded:** Tracks HVAC status, vent modes, intake modes, compressor power, and PTC heater power. 
 * **👻 Ghost Temperature Fix:** Prevents the infamous "55ºC Cabin Temperature" spike. The Leaf broadcasts `0x83` (131 decimal) when the climate unit is OFF. This code actively ignores placeholder bytes, keeping your graphs accurate.
 * **🛡️ Smart Polling (12V Battery Protection):** Active polling for 12V battery stats is only triggered when the car is `ON`, `ACC`, or `Charging`. When the car sleeps, the ESP32 passively listens, preventing vampire drain on the 12V battery.
-* **🌐 Web Fallback UI:** Features a modern, standalone web server (ESPHome Web UI v3) to access real-time car data directly via the ESP's IP or Fallback Hotspot, even if Home Assistant is offline.
+
+### 🌐 Web Fallback UI
+Features a modern, standalone web server (ESPHome Web UI v3) to access real-time car data directly via the ESP's IP or Fallback Hotspot, even if Home Assistant is offline.
+
+![ESPHome Web Fallback UI](screenshot.png)
+*(Example of the ESPHome Web UI displaying real-time data)*
 
 ---
 
@@ -57,11 +62,10 @@ To read traction battery and inverter data, you must connect to the **EV-CAN**.
 
 ## 🚀 Installation
 
-1. Clone or download this repository.
-2. Open the `leaf-can.yaml` file and ensure your `secrets.yaml` contains your Wi-Fi credentials.
-3. Flash the code to your ESP32-C3 using the ESPHome Dashboard or the ESPHome Web Flasher.
+1. Flash the code to your ESP32-C3 using the ESPHome Dashboard.
+2. In Home Assistant, navigate to **Settings > Devices & Services > ESPHome**, and your new `ESP_Leaf` node should be discovered automatically.
+3. Open the `leafwifize1.yaml` file, copy everthing below `- captive portal:` and paste it below your existing config from ESPHome.
 4. Install the module in your car.
-5. In Home Assistant, navigate to **Settings > Devices & Services > ESPHome**, and your new `ESP_Leaf` node should be discovered automatically.
 
 ---
 
@@ -73,7 +77,8 @@ Want a beautiful interface right out of the box? I have designed a custom Lovela
 2. Create a new View in your Home Assistant Dashboard.
 3. Edit the View in YAML mode and paste the contents of the `dashboard_layout.yaml` file (found in this repository).
 
-*(Your dashboard will look similar to this, divided into logic sections: General, Dynamics, Temperatures, and Diagnostics).*
+![Home Assistant Dashboard](hadashboard.png)
+*(Custom Home Assistant Dashboard for Nissan Leaf ZE1)*
 
 ---
 
@@ -87,10 +92,13 @@ This integration exposes a **Diagnostic & 12V** section in Home Assistant:
 
 ## 🙏 Credits & Acknowledgments
 
-A massive thank you to the open-source EV community and specifically to **[Dala the Great](https://github.com/dalathegreat)**. 
-The CAN bus decoding, formulas, and payload structures used in this project rely heavily on the extensive reverse-engineering work documented in his [leaf_can_bus_messages](https://github.com/dalathegreat/leaf_can_bus_messages) repository. 
+This project stands on the shoulders of giants within the open-source EV community:
 
-If you own a Leaf, be sure to check out his channel and work!
+* **[CrAzYDr1veR](https://github.com/CrAzYDr1veR):** A huge thanks for the original repository that served as the initial foundation and fork for this project.
+* **[Dala the Great](https://github.com/dalathegreat):** The CAN bus decoding, formulas, and payload structures rely heavily on the extensive reverse-engineering work documented in his [leaf_can_bus_messages](https://github.com/dalathegreat/leaf_can_bus_messages) repository. 
+* **Gareth:** For the excellent and detailed hardware documentation, which made wiring and integration safe and straightforward. Check out his full write-up here: [Notes on integrating a Nissan Leaf ZE1 and Home Assistant](https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/).
+
+If you own a Leaf, be sure to check out their amazing work!
 
 ---
 *Disclaimer: This project is for educational and diagnostic purposes. Connecting custom hardware to your vehicle's CAN bus carries inherent risks. I am not responsible for any damage to your vehicle, voided warranties, or drained 12V batteries.*
