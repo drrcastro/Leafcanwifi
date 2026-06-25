@@ -55,7 +55,7 @@ The SN65HVD230 transceiver runs at 3.3V, making it perfectly safe for direct con
 To read traction battery and inverter data, you must connect to the **EV-CAN**. 
 * **CAN-H:** Connect to EV-CAN High
 * **CAN-L:** Connect to EV-CAN Low
-
+![CAN Gateway Pinout](gateway.jpg)
 > ⚠️ **Note on Odometer and TPMS:** The Nissan Leaf uses multiple CAN networks. The Odometer, Tire Pressures (TPMS), and door statuses reside on the **CAR-CAN**. Because this hardware is connected strictly to the **EV-CAN**, those specific sensors are out of scope for this firmware.
 
 ---
