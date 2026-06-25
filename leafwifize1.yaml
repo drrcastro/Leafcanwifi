@@ -1,263 +1,449 @@
-# Nissan Leaf ZE1 (2018+) EV-CAN Monitor
-# Hardware: ESP32-C3 Super Mini + SN65HVD230
-# Tap: M101 gateway connector pin 12 (CANH), pin 24 (CANL)
-# DBC source: dalathegreat EV-can_ZE1.dbc
+# Board: ESP32-C3 Super Mini (Generic)
+# Definition: definitions/boards/esp32-c3-supermini/manifest.yaml
 
 esphome:
-  name: leafwifize1
-  friendly_name: Leaf CAN Monitor ZE1
+  name: esp-leaf
+  friendly_name: ESP_Leaf
 
 esp32:
-  board: esp32-c3-devkitm-1
-  variant: ESP32C3
+  variant: esp32c3
+  flash_size: 4MB
   framework:
-    type: arduino
+    type: esp-idf
+
+api:
+  encryption:
+    key: "YOUR_ENCRYPTION_KEY_HERE" 
+
+ota:
+  - platform: esphome
 
 wifi:
-  ssid: "YourSSID"
-  password: "YourPassword"
-  use_address: 192.168.1.99
-  manual_ip:
-    static_ip: 192.168.1.99
-    gateway: 192.168.1.1
-    subnet: 255.255.255.0
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
   ap:
-    ssid: "leafze1-fallback"
-    password: "fallback123"
-  power_save_mode: none
+    ssid: ESP_Leaf Fallback Hotspot
+    password: "XmXcQwAbdbRz"
+
+captive_portal:
+
+# ==============================================================================
+# NISSAN LEAF ZE1 - CAN MONITOR V5 (Full Engineering - EV-CAN Only)
+# ESP32-C3 Super Mini + SN65HVD230
+# EV-CAN | TX=GPIO4 | RX=GPIO3 | 500 kbps
+# ==============================================================================
+
+logger:
+  level: INFO
+  logs:
+    canbus: WARN
+    esp32_can: WARN
+
+web_server:
+  port: 80
 
 time:
   - platform: sntp
     id: sntp_time
     timezone: "Europe/Lisbon"
-    on_time_sync:
-      then:
-        - lambda: |-
-            ESP_LOGI("time", "Time synced: %02d:%02d", id(sntp_time).now().hour, id(sntp_time).now().minute);
 
-logger:
-  logs:
-    canbus: INFO
-    charge: INFO
-    sleep: INFO
-    time: INFO
-
-web_server:
-  port: 80
-
-api:
-  reboot_timeout: 0s
-
-ota:
-  - platform: esphome
-    password: "your_ota_password"
-
-deep_sleep:
-  id: deep_sleep_handler
-  sleep_duration: 5min
-
+# ------------------------------------------------------------------------------
+# GLOBALS
+# ------------------------------------------------------------------------------
 globals:
   - id: is_charging
     type: bool
-    restore_value: no
     initial_value: "false"
-
-  - id: plug_connected
-    type: bool
-    restore_value: no
-    initial_value: "false"
-
-  - id: last_current
-    type: float
-    restore_value: no
-    initial_value: "0.0"
 
   - id: last_voltage
     type: float
-    restore_value: no
+    initial_value: "0.0"
+
+  - id: last_current
+    type: float
+    initial_value: "0.0"
+
+  - id: last_power
+    type: float
+    initial_value: "0.0"
+
+  - id: last_discharge_limit
+    type: float
+    initial_value: "0.0"
+
+  - id: last_charge_limit
+    type: float
+    initial_value: "0.0"
+
+  - id: last_obc_power
+    type: float
+    initial_value: "0.0"
+
+  - id: last_charge_time
+    type: float
+    initial_value: "0.0"
+
+  - id: last_inv_temp
+    type: float
     initial_value: "0.0"
 
   - id: full_capacity_wh
     type: float
-    restore_value: no
     initial_value: "0.0"
 
   - id: remaining_energy_wh
     type: float
-    restore_value: no
     initial_value: "0.0"
 
-  - id: charging_session_active_flag
-    type: bool
-    restore_value: no
-    initial_value: "false"
+# ------------------------------------------------------------------------------
+# ONBOARD RGB LED
+# ------------------------------------------------------------------------------
+light:
+  - platform: esp32_rmt_led_strip
+    name: "Status LED"
+    id: status_led
+    pin: GPIO8
+    num_leds: 1
+    rgb_order: GRB
+    chipset: WS2812
 
+# ==============================================================================
+# CAN BUS
+# ==============================================================================
 canbus:
   - platform: esp32_can
     tx_pin: GPIO4
-    rx_pin: GPIO5
+    rx_pin: GPIO3
     can_id: 999
     bit_rate: 500KBPS
 
     on_frame:
-      # Gear shift and car on/off status
+
+      # --------------------------------------------------------------------------
+      # 0x11A - Vehicle state / Gearbox
+      # --------------------------------------------------------------------------
       - can_id: 0x11A
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 2) {
                 uint8_t gear = (x[0] >> 4) & 0x0F;
-                if (gear == 4) id(gear_shift_sensor).publish_state("Drive/B");
-                else if (gear == 3) id(gear_shift_sensor).publish_state("Neutral");
+
+                if (gear == 1) id(gear_shift_sensor).publish_state("Park");
                 else if (gear == 2) id(gear_shift_sensor).publish_state("Reverse");
-                else if (gear == 0) id(gear_shift_sensor).publish_state("Park");
+                else if (gear == 3) id(gear_shift_sensor).publish_state("Neutral");
+                else if (gear == 4) id(gear_shift_sensor).publish_state("Drive");
+                else if (gear == 7) id(gear_shift_sensor).publish_state("Eco/B");
                 else id(gear_shift_sensor).publish_state("Unknown");
 
                 uint8_t car_on = (x[1] >> 5) & 0x07;
-                if (car_on == 4) id(car_status_sensor).publish_state("OFF");
-                else if (car_on == 8) id(car_status_sensor).publish_state("ON");
+
+                if (car_on == 0) id(car_status_sensor).publish_state("OFF");
+                else if (car_on == 1) id(car_status_sensor).publish_state("ACC");
+                else if (car_on == 2 || car_on == 3) id(car_status_sensor).publish_state("ON");
+                else if (car_on == 4) id(car_status_sensor).publish_state("Charging/Standby");
                 else id(car_status_sensor).publish_state("Unknown");
+
+                bool eco_selected = x[0] & 0x40;
+                id(eco_mode_sensor).publish_state(eco_selected ? "On" : "Off");
               }
 
-      # LBC SOC — 0.1% resolution
-      - can_id: 0x55B
+      # --------------------------------------------------------------------------
+      # 0x1D4 - Charge state
+      # --------------------------------------------------------------------------
+      - can_id: 0x1D4
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 2) {
-                uint16_t raw = ((x[0] << 8) | x[1]) >> 6;
-                if (raw == 0x3FF) return; // invalid reading
-                float soc = raw / 10.0;
-                id(lbc_soc_sensor).publish_state(soc);
+              if (x.size() >= 7) {
+                uint8_t b6 = x[6];
 
-                bool actively_charging = id(plug_connected) && id(last_current) > 0.5;
-                id(is_charging) = actively_charging;
+                if (b6 == 0xE0) {
+                  id(is_charging) = true;
 
-                if (actively_charging) {
-                  if (!id(charging_session_active_flag)) {
-                    id(charging_session_active_flag) = true;
-                    ESP_LOGI("charge", "Session started at SOC %.1f%%", soc);
+                  if (fabs(id(last_current)) > 0.5) {
+                    id(charge_status_sensor).publish_state("Charging");
+                  } else {
+                    id(charge_status_sensor).publish_state("Plugged/Standby");
                   }
 
-                  float power_w = id(last_current) * id(last_voltage);
-                  if (power_w > 100.0 && id(full_capacity_wh) > 0.0 && id(remaining_energy_wh) > 0.0) {
-                    float wh_to_80 = (id(full_capacity_wh) * 0.8) - id(remaining_energy_wh);
-                    float wh_to_100 = id(full_capacity_wh) - id(remaining_energy_wh);
-                    if (wh_to_80 > 0) {
-                      id(time_to_80_sensor).publish_state((wh_to_80 / power_w) * 60.0);
-                    } else {
-                      id(time_to_80_sensor).publish_state(0);
-                    }
-                    id(time_to_100_sensor).publish_state((wh_to_100 / power_w) * 60.0);
-                  }
-
+                } else if (b6 == 0x8C) {
+                  id(is_charging) = false;
+                  id(charge_status_sensor).publish_state("Interrupted");
                 } else {
-                  if (id(charging_session_active_flag)) {
-                    id(charging_session_active_flag) = false;
-                    ESP_LOGI("charge", "Session ended");
+                  id(is_charging) = false;
+                  id(charge_status_sensor).publish_state("Disconnected/Idle");
+                }
+
+                bool hv_supply = x[4] & 0x04;
+                bool relay_plus = x[5] & 0x40;
+
+                id(hv_supply_status_sensor).publish_state(hv_supply ? "Active" : "Inactive");
+                id(relay_plus_status_sensor).publish_state(relay_plus ? "On" : "Off");
+              }
+
+      # --------------------------------------------------------------------------
+      # 0x1DB - Voltage, current, power
+      # --------------------------------------------------------------------------
+      - can_id: 0x1DB
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 6) {
+
+                // ========================
+                // CURRENT
+                // ========================
+                int16_t raw_current = ((x[0] << 3) | (x[1] >> 5)) & 0x7FF;
+                if (raw_current & 0x400) raw_current |= 0xF800; // Sign extend for negative values
+                float current = raw_current * 0.5;
+
+                if (fabs(current) < 400.0) {
+                  if (id(last_current) == 0.0 || fabs(current - id(last_current)) < 50.0) {
+                    id(last_current) = current;
+                    id(battery_current_sensor).publish_state(current);
                   }
-                  id(time_to_80_sensor).publish_state(-1);
-                  id(time_to_100_sensor).publish_state(-1);
+                }
+
+                // ========================
+                // VOLTAGE
+                // ========================
+                uint16_t raw_voltage = ((x[2] << 2) | (x[3] >> 6)) & 0x3FF;
+                float voltage = raw_voltage * 0.5;
+
+                if (voltage > 250.0 && voltage < 450.0) {
+                  if (id(last_voltage) == 0.0 || fabs(voltage - id(last_voltage)) < 50.0) {
+                    id(last_voltage) = voltage;
+                    id(battery_voltage_sensor).publish_state(voltage);
+                  }
+                }
+
+                // ========================
+                // POWER
+                // ========================
+                float power_kw = (id(last_current) * id(last_voltage)) / 1000.0;
+
+                if (fabs(power_kw) < 150.0) {
+                  if (id(last_power) == 0.0 || fabs(power_kw - id(last_power)) < 50.0) {
+                    id(last_power) = power_kw;
+                    id(hv_power_sensor).publish_state(power_kw);
+                  }
+                }
+
+                if (!isnan(id(lbc_soc_sensor).state)) {
+                  id(usable_soc_sensor).publish_state(id(lbc_soc_sensor).state);
                 }
               }
 
-      # Ambient temperature — ZE1 offset -40.5
-      - can_id: 0x54C
+      # --------------------------------------------------------------------------
+      # 0x1DC - Charge and discharge limits
+      # --------------------------------------------------------------------------
+      - can_id: 0x1DC
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 7 && x[6] != 0xFF) {
-                float temp = (x[6] * 0.5) - 40.5;
-                id(ambient_temp_sensor).publish_state(temp);
+              if (x.size() >= 4) {
+
+                uint16_t raw_discharge = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+                float d = raw_discharge * 0.25;
+
+                if (d > 0 && d < 200) {
+                  if (id(last_discharge_limit) == 0 || fabs(d - id(last_discharge_limit)) < 30) {
+                    id(last_discharge_limit) = d;
+                    id(discharge_limit_sensor).publish_state(d);
+                  }
+                }
+
+                uint16_t raw_charge = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
+                float c = raw_charge * 0.25;
+
+                if (c > 0 && c < 120) {
+                  if (id(last_charge_limit) == 0 || fabs(c - id(last_charge_limit)) < 20) {
+                    id(last_charge_limit) = c;
+                    id(charge_limit_sensor).publish_state(c);
+                  }
+                }
               }
 
-      # Cabin temperature from climate control unit
-      - can_id: 0x54F
+      # --------------------------------------------------------------------------
+      # 0x390 - OBC / On-board charger
+      # --------------------------------------------------------------------------
+      - can_id: 0x390
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 1 && x[0] != 20) {
-                float temp = (5.0 / 9.0) * (x[0] - 32);
-                id(cabin_temp_sensor).publish_state(temp);
+              if (x.size() >= 7) {
+                uint16_t raw_obc_power = ((x[5] << 1) | (x[6] >> 7)) & 0x1FF;
+                float obc_power_kw = raw_obc_power * 0.1;
+
+                if (obc_power_kw > 0.1 && obc_power_kw < 10.0) {
+                  id(last_obc_power) = obc_power_kw;
+                  id(obc_max_power_sensor).publish_state(obc_power_kw);
+                } else if (id(is_charging)) {
+                  id(obc_max_power_sensor).publish_state(id(last_obc_power));
+                }
               }
 
-      # HVAC status and fan speed
+      # --------------------------------------------------------------------------
+      # 0x54A - AC ambient temperature
+      # --------------------------------------------------------------------------
+      - can_id: 0x54A
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 8) {
+                if (x[7] != 0xFF) {
+                  float temp_ac = x[7] - 40.0;
+                  if (temp_ac > -30.0 && temp_ac < 60.0) {
+                    id(ambient_ac_sensor).publish_state(temp_ac);
+                  }
+                }
+              }
+
+      # --------------------------------------------------------------------------
+      # 0x54B - HVAC status + Fan + Vent + Intake
+      # --------------------------------------------------------------------------
       - can_id: 0x54B
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 5) {
                 int fan_speed = ((x[4] & 0x38) >> 3);
-                id(hvac_fan_sensor).publish_state(fan_speed / 7.0 * 100.0);
-                bool hvac_on = (x[0] == 0x10) && (fan_speed != 0);
+
+                if (fan_speed >= 0 && fan_speed <= 7) {
+                  id(hvac_fan_sensor).publish_state((fan_speed / 7.0) * 100.0);
+                }
+
+                bool hvac_on = fan_speed > 0;
                 id(hvac_status_sensor).publish_state(hvac_on ? "On" : "Off");
+                id(climate_control_status_sensor).publish_state(hvac_on ? "On" : "Off");
+
+                if (!hvac_on) {
+                  id(ac_status_sensor).publish_state("Off");
+                }
+
+                // Vents (Air duct)
+                if (x[2] == 136) id(hvac_vent_mode_sensor).publish_state("Face");
+                else if (x[2] == 144) id(hvac_vent_mode_sensor).publish_state("Face/Feet");
+                else if (x[2] == 152) id(hvac_vent_mode_sensor).publish_state("Feet");
+                else if (x[2] == 160) id(hvac_vent_mode_sensor).publish_state("Feet/Defrost");
+                else if (x[2] == 168) id(hvac_vent_mode_sensor).publish_state("Defrost");
+
+                // Intake 
+                if (x[3] == 0) id(hvac_intake_mode_sensor).publish_state("Off");
+                else if (x[3] == 18) id(hvac_intake_mode_sensor).publish_state("Fresh Air");
+                else if (x[3] == 9) id(hvac_intake_mode_sensor).publish_state("Recirculation");
               }
 
-      # Motor and inverter temperature
+      # --------------------------------------------------------------------------
+      # 0x54C - Ambient temperature / Evaporator / Fan voltage
+      # --------------------------------------------------------------------------
+      - can_id: 0x54C
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 7) {
+                if (x[6] != 0xFF) {
+                  float temp = (x[6] * 0.5) - 40.5;
+                  if (temp > -30.0 && temp < 60.0) {
+                    id(ambient_temp_sensor).publish_state(temp);
+                  }
+                }
+
+                float evap_temp = x[0] * 0.25;
+                if (evap_temp >= -30.0 && evap_temp <= 80.0) {
+                  id(evaporator_temp_sensor).publish_state(evap_temp);
+                }
+
+                float fan_voltage = x[5] * 0.05;
+                if (fan_voltage >= 0.0 && fan_voltage <= 16.0) {
+                  id(fan_voltage_sensor).publish_state(fan_voltage);
+                }
+              }
+
+      # --------------------------------------------------------------------------
+      # 0x54F - Cabin temperature
+      # --------------------------------------------------------------------------
+      - can_id: 0x54F
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 6) {
+                // Real cabin temperature is in byte 3 (offset -40)
+                if (x[3] != 0xFF && x[3] != 0x00) { 
+                  float cabin_temp = (x[3] * 0.5) - 40.0;
+                  if (cabin_temp > -20.0 && cabin_temp < 60.0) {
+                    id(cabin_temp_sensor).publish_state(cabin_temp);
+                  }
+                }
+
+                float ac_power_kw = (x[1] * 50.0) / 1000.0;
+                if (ac_power_kw >= 0.0 && ac_power_kw <= 15.0) {
+                  id(ac_power_sensor).publish_state(ac_power_kw);
+                  if (ac_power_kw > 0.1) id(ac_status_sensor).publish_state("On");
+                }
+
+                float heater_power_kw = ((x[5] & 0x3F) * 300.0) / 1000.0;
+                if (heater_power_kw >= 0.0 && heater_power_kw <= 15.0) {
+                  id(heater_power_sensor).publish_state(heater_power_kw);
+                }
+              }
+
+      # --------------------------------------------------------------------------
+      # 0x55A - Motor / Inverter temperatures
+      # --------------------------------------------------------------------------
       - can_id: 0x55A
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 3) {
-                float motor_temp = (5.0 / 9.0) * (x[1] - 32);
-                float inverter_temp = (5.0 / 9.0) * (x[2] - 32);
-                id(motor_temp_sensor).publish_state(motor_temp);
-                id(inverter_temp_sensor).publish_state(inverter_temp);
-              }
+              if (x.size() >= 5) {
+                float inverter_temp = x[1] / 2.0;
+                float igbt_temp = x[2] / 2.0;
+                float igbt_driver_temp = x[3] / 2.0;
+                float motor_temp = x[4] / 2.0;
 
-      # Battery current and voltage
-      - can_id: 0x1DB
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 6) {
-                int16_t raw_current = ((x[0] << 3) | (x[1] >> 5)) & 0x7FF;
-                if (raw_current & 0x400) raw_current |= 0xF800;
-                float current = raw_current * 0.5;
-                id(last_current) = current;
-                id(battery_current_sensor).publish_state(current);
-
-                uint16_t raw_voltage = ((x[2] << 2) | (x[3] >> 6)) & 0x3FF;
-                float voltage = raw_voltage * 0.5;
-                id(last_voltage) = voltage;
-                id(battery_voltage_sensor).publish_state(voltage);
-              }
-
-      # Charge and discharge power limits
-      - can_id: 0x1DC
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 4) {
-                uint16_t raw_discharge = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
-                float discharge = raw_discharge * 0.25;
-                if (isnan(id(discharge_power_limit_sensor).state) ||
-                    abs(discharge - id(discharge_power_limit_sensor).state) > 1.0) {
-                  id(discharge_power_limit_sensor).publish_state(discharge);
+                if (inverter_temp > -30.0 && inverter_temp < 120.0) {
+                  if (id(last_inv_temp) == 0 || fabs(inverter_temp - id(last_inv_temp)) < 10) {
+                    id(last_inv_temp) = inverter_temp;
+                    id(inverter_temp_sensor).publish_state(inverter_temp);
+                  }
                 }
 
-                uint16_t raw_charge = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
-                float charge_limit = raw_charge * 0.25;
-                if (isnan(id(charge_power_limit_sensor).state) ||
-                    abs(charge_limit - id(charge_power_limit_sensor).state) > 1.0) {
-                  id(charge_power_limit_sensor).publish_state(charge_limit);
+                if (igbt_temp > -30.0 && igbt_temp < 120.0) {
+                  id(igbt_temp_sensor).publish_state(igbt_temp);
+                }
+
+                if (igbt_driver_temp > -30.0 && igbt_driver_temp < 120.0) {
+                  id(igbt_driver_temp_sensor).publish_state(igbt_driver_temp);
+                }
+
+                if (motor_temp > -30.0 && motor_temp < 120.0 && motor_temp != 0.0) {
+                  id(motor_temp_sensor).publish_state(motor_temp);
                 }
               }
 
-      # GIDS and SOH
-      - can_id: 0x5BC
+      # --------------------------------------------------------------------------
+      # 0x55B - LBC SOC
+      # --------------------------------------------------------------------------
+      - can_id: 0x55B
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 6) {
-                uint16_t gids = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
-                id(gids_sensor).publish_state(gids);
+              if (x.size() >= 2) {
+                uint16_t raw = ((x[0] << 8) | x[1]) >> 6;
 
-                uint8_t soh = (x[4] >> 1) & 0x7F;
-                id(soh_sensor).publish_state(soh);
+                if (raw != 0x3FF) {
+                  float soc = raw / 10.0;
+                  if (soc >= 0.0 && soc <= 100.0) {
+                    id(lbc_soc_sensor).publish_state(soc);
+                    id(usable_soc_sensor).publish_state(soc);
+                  }
+                }
               }
 
-      # Full and remaining capacity from LBC
+      # --------------------------------------------------------------------------
+      # 0x59E - Battery energy
+      # --------------------------------------------------------------------------
       - can_id: 0x59E
         use_extended_id: false
         then:
@@ -269,175 +455,302 @@ canbus:
                 uint16_t raw_remain = ((x[3] & 0x0F) << 5) | (x[4] >> 3);
                 float remain_wh = raw_remain * 100.0;
 
-                if (full_wh >= 10000.0 && full_wh <= 70000.0) {
+                if (full_wh > 10000.0 && full_wh < 70000.0) {
                   id(full_capacity_wh) = full_wh;
                   id(full_capacity_sensor).publish_state(full_wh / 1000.0);
                 }
 
-                if (remain_wh >= 0.0 && remain_wh <= 70000.0) {
+                if (remain_wh > 0.0 && remain_wh < 70000.0) {
                   id(remaining_energy_wh) = remain_wh;
                   id(remaining_energy_sensor).publish_state(remain_wh / 1000.0);
                 }
+
+                if (id(full_capacity_wh) > 10000.0 && id(remaining_energy_wh) > 0.0) {
+                  float calculated_soc = (id(remaining_energy_wh) / id(full_capacity_wh)) * 100.0;
+                  if (calculated_soc >= 0.0 && calculated_soc <= 100.0) {
+                    id(calculated_energy_soc_sensor).publish_state(calculated_soc);
+                  }
+                }
               }
 
-      # Battery temperature from LBC
+      # --------------------------------------------------------------------------
+      # 0x5BC - GIDs, SOH, bars, remaining time
+      # --------------------------------------------------------------------------
+      - can_id: 0x5BC
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 8) {
+                uint16_t gids = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
+
+                // Filter to ignore the "Max Scale" (500) multiplexed frame
+                static uint16_t last_valid_gids = 0;
+                int diff = (int)gids - (int)last_valid_gids;
+
+                if (gids > 0 && gids < 600) {
+                  if (last_valid_gids == 0 || std::abs(diff) < 50) {
+                    last_valid_gids = gids;
+                    id(gids_sensor).publish_state(gids);
+                  } else if (gids != 500) {
+                    last_valid_gids = gids;
+                    id(gids_sensor).publish_state(gids);
+                  }
+                }
+
+                uint8_t soh = (x[4] >> 1) & 0x7F;
+                if (soh > 0 && soh <= 100) {
+                  id(soh_sensor).publish_state(soh);
+                }
+
+                uint8_t mux = x[4] & 0x0F;
+
+                if (mux == 8) {
+                  uint8_t charge_bars = (x[2] >> 4) & 0x0F;
+                  id(charge_bars_sensor).publish_state(charge_bars);
+                } else if (mux == 9) {
+                  uint8_t capacity_bars = (x[2] >> 4) & 0x0F;
+                  id(capacity_bars_sensor).publish_state(capacity_bars);
+                }
+
+                uint8_t temp_dash_raw = x[3];
+                float temp_dash_percent = temp_dash_raw * 0.4166666;
+                if (temp_dash_percent >= 0.0 && temp_dash_percent <= 100.0) {
+                  id(battery_temp_dash_sensor).publish_state(temp_dash_percent);
+                }
+
+                uint16_t remain_charge_time = ((x[6] & 0x1F) << 8) | x[7];
+
+                if (id(is_charging)) {
+                  if (remain_charge_time > 0 && remain_charge_time < 1000) {
+                    if (id(last_charge_time) == 0 || fabs(remain_charge_time - id(last_charge_time)) < 60) {
+                      id(last_charge_time) = remain_charge_time;
+                      id(remaining_charge_time_sensor).publish_state(remain_charge_time);
+                    }
+                  }
+                }
+              }
+
+      # --------------------------------------------------------------------------
+      # 0x5C0 - Battery temperature / Heater
+      # --------------------------------------------------------------------------
       - can_id: 0x5C0
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 3 && (x[0] >> 6) == 1) {
-                float temp = x[2] / 2.0 - 40.0;
-                id(battery_temp_sensor).publish_state(temp);
+              if (x.size() >= 8) {
+                uint8_t mux = x[0] & 0x07;
+
+                if (mux == 1 || mux == 2 || mux == 3) {
+                  float wakeup_temp = ((x[1] >> 1) & 0x7F) - 40.0;
+                  float hist_temp = ((x[2] >> 1) & 0x7F) - 40.0;
+
+                  if (hist_temp > -30.0 && hist_temp < 80.0) {
+                    id(battery_temp_sensor).publish_state(hist_temp);
+                  }
+
+                  if (wakeup_temp > -30.0 && wakeup_temp < 80.0) {
+                    id(battery_wakeup_temp_sensor).publish_state(wakeup_temp);
+                  }
+                }
+
+                bool heat_start_req = x[0] & 0x20;
+                bool heat_stop_req = x[0] & 0x10;
+                bool heater_mail_req = x[1] & 0x01;
+                bool battery_heater_exists = x[4] & 0x01;
+
+                id(battery_heater_start_sensor).publish_state(heat_start_req ? "Requested" : "No");
+                id(battery_heater_stop_sensor).publish_state(heat_stop_req ? "Requested" : "No");
+                id(battery_heater_mail_sensor).publish_state(heater_mail_req ? "Requested" : "No");
+                id(battery_heater_exists_sensor).publish_state(battery_heater_exists ? "Yes" : "No");
+
+                id(battery_heater_dtc_sensor).publish_state(x[7]);
               }
 
-      # Charge status and plug detection
-      - can_id: 0x1D4
+      # --------------------------------------------------------------------------
+      # 0x79A - VCM response: 12V battery
+      # --------------------------------------------------------------------------
+      - can_id: 0x79A
         use_extended_id: false
         then:
           - lambda: |-
-              if (x.size() >= 7) {
-                uint8_t b6 = x[6];
-                if (b6 == 0xE0) {
-                  id(plug_connected) = true;
-                  if (id(last_current) > 0.5) {
-                    id(charge_status_sensor).publish_state("Charging");
-                  } else {
-                    id(charge_status_sensor).publish_state("Plugged In");
+              if (x.size() >= 5) {
+                uint8_t pid = x[3];
+
+                if (pid == 0x03) {
+                  float v12 = x[4] * 0.08;
+
+                  if (v12 > 8.0 && v12 < 16.0) {
+                    id(bat_12v_voltage_sensor).publish_state(v12);
                   }
-                } else if (b6 == 0x8C) {
-                  id(plug_connected) = false;
-                  id(charge_status_sensor).publish_state("Interrupted");
-                } else {
-                  id(plug_connected) = false;
-                  id(charge_status_sensor).publish_state("Not Plugged In");
                 }
               }
 
-      # Connector detection
-      - can_id: 0x1F2
+      # ========================================================================
+      # GOM PACKAGE (Guess-O-Meter / Estimated Range)
+      # ========================================================================
+      - can_id: 0x5A9
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 3) {
-                bool connector = (x[2] >> 1) & 0x01;
-                id(connector_sensor).publish_state(connector);
+                // Approximate calculation of dashboard km estimate
+                uint16_t raw_gom = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
+                float gom_km = raw_gom * 0.2; 
+                
+                static float last_gom = -1.0;
+                // Only updates if changed by 1 km
+                if (gom_km > 0 && gom_km < 600 && fabs(gom_km - last_gom) >= 1.0) {
+                  last_gom = gom_km;
+                  id(gom_sensor).publish_state(gom_km);
+                }
               }
 
-interval:
-  - interval: 30s
-    then:
-      - if:
-          condition:
-            lambda: |-
-              auto now = id(sntp_time).now();
-              if (!now.is_valid()) return false;
-              int hour = now.hour;
-              bool in_quiet_hours = (hour >= 0 && hour < 7);
-              if (in_quiet_hours && !id(is_charging)) {
-                ESP_LOGI("sleep", "Quiet hours (%02d:xx), not charging — sleeping 5min", hour);
+      # ========================================================================
+      # "HEAVY FOOT" PACKAGE (Accelerator, RPM and Torque)
+      # ========================================================================
+      - can_id: 0x1D5
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 1) {
+                float accel_pct = x[0] * 0.4; // 0 to 100%
+                
+                static float last_accel = -1.0;
+                // Only updates if pedal pressure changes by more than 2%
+                if (fabs(accel_pct - last_accel) >= 2.0) {
+                  last_accel = accel_pct;
+                  id(accelerator_sensor).publish_state(accel_pct);
+                }
               }
-              return in_quiet_hours && !id(is_charging);
-          then:
-            - deep_sleep.enter:
-                id: deep_sleep_handler
-                sleep_duration: 5min
 
+      - can_id: 0x1DA
+        use_extended_id: false
+        then:
+          - lambda: |-
+              if (x.size() >= 6) {
+                // Motor RPM (Signed 16-bit)
+                int16_t rpm = (x[4] << 8) | x[5];
+                static int16_t last_rpm = -9999;
+                if (abs(rpm - last_rpm) >= 50) { // Updates every 50 RPM
+                  last_rpm = rpm;
+                  id(motor_rpm_sensor).publish_state(rpm);
+                }
+
+                // Torque (Nm) - Positive=Accelerate, Negative=Regenerate
+                int16_t raw_torque = ((x[2] << 3) | (x[3] >> 5)) & 0x7FF;
+                if (raw_torque & 0x400) raw_torque |= 0xF800; // Sign extend for negative values
+                float torque = raw_torque * 0.5;
+                
+                static float last_torque = -9999.0;
+                if (fabs(torque - last_torque) >= 5.0) { // Updates every 5 Nm
+                  last_torque = torque;
+                  id(motor_torque_sensor).publish_state(torque);
+                }
+              }
+
+      # ========================================================================
+      # BMS PACKAGE (Cell Balancing / Shunts)
+      # ========================================================================
+      - can_id: 0x501
+        use_extended_id: false
+        then: &bms_shunt_logic
+          - lambda: |-
+              // Count how many bits are '1' in the frame bytes
+              // Each bit at 1 means the BMS is bleeding energy from that cell
+              int active_shunts = 0;
+              for(int i=0; i<x.size(); i++) {
+                active_shunts += __builtin_popcount(x[i]); 
+              }
+              
+              static int last_shunts = -1;
+              if (active_shunts != last_shunts) {
+                last_shunts = active_shunts;
+                // Updates the total sensor (simplified, sums only the current ID)
+                id(bms_active_shunts_sensor).publish_state(active_shunts);
+              }
+      
+      # Reuses the same counting logic for other shunt IDs
+      - can_id: 0x502
+        use_extended_id: false
+        then: *bms_shunt_logic
+      - can_id: 0x503
+        use_extended_id: false
+        then: *bms_shunt_logic
+      - can_id: 0x504
+        use_extended_id: false
+        then: *bms_shunt_logic
+
+# ==============================================================================
+# NUMERIC SENSORS
+# ==============================================================================
 sensor:
+
   - platform: template
     name: "LBC SOC"
     id: lbc_soc_sensor
     unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
     accuracy_decimals: 1
     icon: "mdi:battery"
 
   - platform: template
-    name: "Battery Voltage"
-    id: battery_voltage_sensor
-    unit_of_measurement: "V"
-    accuracy_decimals: 1
-    icon: "mdi:flash"
-
-  - platform: template
-    name: "Battery Current"
-    id: battery_current_sensor
-    unit_of_measurement: "A"
-    accuracy_decimals: 1
-    icon: "mdi:current-dc"
-
-  - platform: template
-    name: "Battery Temperature"
-    id: battery_temp_sensor
-    unit_of_measurement: "°C"
-    accuracy_decimals: 1
-    icon: "mdi:thermometer"
-
-  - platform: template
-    name: "Motor Temperature"
-    id: motor_temp_sensor
-    unit_of_measurement: "°C"
-    accuracy_decimals: 1
-    icon: "mdi:thermometer"
-
-  - platform: template
-    name: "Inverter Temperature"
-    id: inverter_temp_sensor
-    unit_of_measurement: "°C"
-    accuracy_decimals: 1
-    icon: "mdi:thermometer"
-
-  - platform: template
-    name: "Ambient Temperature"
-    id: ambient_temp_sensor
-    unit_of_measurement: "°C"
-    accuracy_decimals: 1
-    icon: "mdi:thermometer"
-
-  - platform: template
-    name: "Cabin Temperature"
-    id: cabin_temp_sensor
-    unit_of_measurement: "°C"
-    accuracy_decimals: 1
-    icon: "mdi:thermometer"
-
-  - platform: template
-    name: "HVAC Fan Speed"
-    id: hvac_fan_sensor
+    name: "Usable SOC"
+    id: usable_soc_sensor
     unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:battery"
+
+  - platform: template
+    name: "Calculated Energy SOC"
+    id: calculated_energy_soc_sensor
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:battery-sync"
+
+  - platform: template
+    name: "State of Health (SOH)"
+    id: soh_sensor
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
     accuracy_decimals: 0
-    icon: "mdi:fan"
+    icon: "mdi:heart-pulse"
 
   - platform: template
-    name: "Discharge Power Limit"
-    id: discharge_power_limit_sensor
-    unit_of_measurement: "kW"
-    accuracy_decimals: 2
-    icon: "mdi:battery-arrow-down"
-
-  - platform: template
-    name: "Charge Power Limit"
-    id: charge_power_limit_sensor
-    unit_of_measurement: "kW"
-    accuracy_decimals: 2
-    icon: "mdi:battery-arrow-up"
-
-  - platform: template
-    name: "GIDS"
+    name: "GIDs"
     id: gids_sensor
     unit_of_measurement: "GIDs"
+    state_class: measurement
     accuracy_decimals: 0
     icon: "mdi:car-battery"
 
   - platform: template
-    name: "State of Health"
-    id: soh_sensor
-    unit_of_measurement: "%"
+    name: "Charge Bars"
+    id: charge_bars_sensor
+    unit_of_measurement: "bars"
+    state_class: measurement
     accuracy_decimals: 0
-    icon: "mdi:heart-pulse"
+    icon: "mdi:battery-50"
+
+  - platform: template
+    name: "Capacity Bars"
+    id: capacity_bars_sensor
+    unit_of_measurement: "bars"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:battery-heart"
 
   - platform: template
     name: "Remaining Energy"
     id: remaining_energy_sensor
     unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: measurement
     accuracy_decimals: 2
     icon: "mdi:battery-charging"
 
@@ -445,34 +758,271 @@ sensor:
     name: "Full Capacity"
     id: full_capacity_sensor
     unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: measurement
     accuracy_decimals: 2
     icon: "mdi:battery-high"
 
   - platform: template
-    name: "Time to 80%"
-    id: time_to_80_sensor
+    name: "Remaining Charge Time"
+    id: remaining_charge_time_sensor
     unit_of_measurement: "min"
+    state_class: measurement
     accuracy_decimals: 0
-    icon: "mdi:clock-fast"
+    icon: "mdi:timer-outline"
 
   - platform: template
-    name: "Time to 100%"
-    id: time_to_100_sensor
-    unit_of_measurement: "min"
+    name: "HV Battery Voltage"
+    id: battery_voltage_sensor
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:flash"
+
+  - platform: template
+    name: "HV Battery Current"
+    id: battery_current_sensor
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:current-dc"
+
+  - platform: template
+    name: "HV Instant Power"
+    id: hv_power_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:lightning-bolt"
+
+  - platform: template
+    name: "Max Discharge Power"
+    id: discharge_limit_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-down"
+
+  - platform: template
+    name: "Max Charge Power"
+    id: charge_limit_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:battery-arrow-up"
+
+  - platform: template
+    name: "OBC Max Power"
+    id: obc_max_power_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:ev-plug-type2"
+
+  - platform: template
+    name: "Battery Temperature"
+    id: battery_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+
+  - platform: template
+    name: "Battery Wakeup Temperature"
+    id: battery_wakeup_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:thermometer-alert"
+
+  - platform: template
+    name: "Battery Temperature Dash"
+    id: battery_temp_dash_sensor
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:thermometer-lines"
+
+  - platform: template
+    name: "Battery Heater DTC"
+    id: battery_heater_dtc_sensor
     accuracy_decimals: 0
-    icon: "mdi:clock-end"
+    icon: "mdi:alert-circle-outline"
+
+  - platform: template
+    name: "Motor Temperature"
+    id: motor_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:car-coolant-level"
+
+  - platform: template
+    name: "Inverter Temperature"
+    id: inverter_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:engine"
+
+  - platform: template
+    name: "IGBT Temperature"
+    id: igbt_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+
+  - platform: template
+    name: "IGBT Driver Temperature"
+    id: igbt_driver_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+
+  - platform: template
+    name: "Ambient Temperature"
+    id: ambient_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:sun-thermometer"
+
+  - platform: template
+    name: "Ambient Temperature AC"
+    id: ambient_ac_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:sun-thermometer"
+
+  - platform: template
+    name: "Cabin Temperature"
+    id: cabin_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:car-seat-cooler"
+
+  - platform: template
+    name: "Evaporator Temperature"
+    id: evaporator_temp_sensor
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:snowflake-thermometer"
+
+  - platform: template
+    name: "HVAC Fan Speed"
+    id: hvac_fan_sensor
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:fan"
+
+  - platform: template
+    name: "Fan Voltage"
+    id: fan_voltage_sensor
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:fan"
+
+  - platform: template
+    name: "AC Power Consumption"
+    id: ac_power_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:air-conditioner"
+
+  - platform: template
+    name: "Heater Power Consumption"
+    id: heater_power_sensor
+    unit_of_measurement: "kW"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:radiator"
+
+  - platform: template
+    name: "12V Battery Voltage"
+    id: bat_12v_voltage_sensor
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:car-battery"
 
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
-    icon: "mdi:wifi"
 
-binary_sensor:
+  # --- GOM and Dynamics Sensors ---
   - platform: template
-    name: "Connector"
-    id: connector_sensor
-    icon: "mdi:power-plug"
+    name: "Guess-O-Meter (Range)"
+    id: gom_sensor
+    unit_of_measurement: "km"
+    device_class: distance
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:map-marker-distance"
 
+  - platform: template
+    name: "Accelerator Pedal"
+    id: accelerator_sensor
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:car-speed-limiter"
+
+  - platform: template
+    name: "Motor RPM"
+    id: motor_rpm_sensor
+    unit_of_measurement: "RPM"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:engine-outline"
+
+  - platform: template
+    name: "Motor Torque"
+    id: motor_torque_sensor
+    unit_of_measurement: "Nm"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:rotate-3d-variant"
+
+  # --- BMS Sensor ---
+  - platform: template
+    name: "BMS Active Balancing Shunts"
+    id: bms_active_shunts_sensor
+    unit_of_measurement: "cells"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:battery-sync"
+
+# ==============================================================================
+# TEXT SENSORS
+# ==============================================================================
 text_sensor:
   - platform: template
     name: "Gear Shift"
@@ -485,6 +1035,11 @@ text_sensor:
     icon: "mdi:car-info"
 
   - platform: template
+    name: "Eco Mode"
+    id: eco_mode_sensor
+    icon: "mdi:leaf"
+
+  - platform: template
     name: "Charge Status"
     id: charge_status_sensor
     icon: "mdi:ev-station"
@@ -494,19 +1049,148 @@ text_sensor:
     id: hvac_status_sensor
     icon: "mdi:air-conditioner"
 
-button:
-  - platform: restart
-    name: "Leaf CAN Restart"
+  - platform: template
+    name: "Climate Control Status"
+    id: climate_control_status_sensor
+    icon: "mdi:air-conditioner"
 
   - platform: template
-    name: "Wake Car"
-    icon: "mdi:car-connected"
+    name: "AC Status"
+    id: ac_status_sensor
+    icon: "mdi:snowflake"
+
+  - platform: template
+    name: "Main Relay Status"
+    id: main_relay_sensor
+    icon: "mdi:electric-switch"
+
+  - platform: template
+    name: "Full Charge Flag"
+    id: full_charge_sensor
+    icon: "mdi:battery-check"
+
+  - platform: template
+    name: "HV Interlock"
+    id: interlock_sensor
+    icon: "mdi:shield-alert"
+
+  - platform: template
+    name: "Voltage Latch"
+    id: voltage_latch_sensor
+    icon: "mdi:lock-alert"
+
+  - platform: template
+    name: "HV Supply Status"
+    id: hv_supply_status_sensor
+    icon: "mdi:flash"
+
+  - platform: template
+    name: "Relay Plus Status"
+    id: relay_plus_status_sensor
+    icon: "mdi:electric-switch"
+
+  - platform: template
+    name: "Charge Power Status"
+    id: charge_power_status_sensor
+    icon: "mdi:battery-arrow-up"
+
+  - platform: template
+    name: "OBC AC Voltage Status"
+    id: obc_ac_voltage_status_sensor
+    icon: "mdi:ev-plug-type2"
+
+  - platform: template
+    name: "Battery Heater Start"
+    id: battery_heater_start_sensor
+    icon: "mdi:radiator"
+
+  - platform: template
+    name: "Battery Heater Stop"
+    id: battery_heater_stop_sensor
+    icon: "mdi:radiator-off"
+
+  - platform: template
+    name: "Battery Heater Mail"
+    id: battery_heater_mail_sensor
+    icon: "mdi:email-alert"
+
+  - platform: template
+    name: "Battery Heater Exists"
+    id: battery_heater_exists_sensor
+    icon: "mdi:radiator"
+
+  - platform: template
+    name: "HVAC Vent Mode"
+    id: hvac_vent_mode_sensor
+    icon: "mdi:car-defrost-front"
+
+  - platform: template
+    name: "HVAC Intake Mode"
+    id: hvac_intake_mode_sensor
+    icon: "mdi:air-filter"
+
+# ==============================================================================
+# SWITCHES (Control Modes)
+# ==============================================================================
+switch:
+  - platform: template
+    name: "Debug Polling Mode"
+    id: debug_polling_switch
+    icon: "mdi:bug-check"
+    optimistic: true
+
+# ==============================================================================
+# BUTTONS
+# ==============================================================================
+button:
+  - platform: restart
+    name: "Restart Leaf Module"
+
+  - platform: template
+    name: "Force CAN Poll"
+    id: force_can_poll_button
+    icon: "mdi:radar"
     on_press:
+      - script.execute: send_can_queries
+
+# ==============================================================================
+# ACTIVE POLLING (SMART POLLING + DEBUG MODE)
+# ==============================================================================
+interval:
+  - interval: 15s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(debug_polling_switch).state || 
+                     id(is_charging) || 
+                     id(car_status_sensor).state == "ON" || 
+                     id(car_status_sensor).state == "ACC" || 
+                     id(car_status_sensor).state == "Charging/Standby";
+          then:
+            - script.execute: send_can_queries
+
+script:
+  - id: send_can_queries
+    mode: queued
+    then:
+      # Wake up the bus
       - repeat:
-          count: 5
+          count: 10
           then:
             - canbus.send:
                 data: [0x00]
                 can_id: 0x56E
                 use_extended_id: false
             - delay: 50ms
+
+      - delay: 300ms
+
+      # --------------------------------------------------------------------------
+      # VCM polling: query 0x797, response 0x79A
+      # 12V battery
+      # --------------------------------------------------------------------------
+      - canbus.send:
+          data: [0x03, 0x22, 0x11, 0x03, 0x00, 0x00, 0x00, 0x00]
+          can_id: 0x797
+          use_extended_id: false
