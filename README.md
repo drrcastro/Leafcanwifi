@@ -64,7 +64,7 @@ To read traction battery and inverter data, you must connect to the **EV-CAN**.
 
 1. Flash the code to your ESP32-C3 using the ESPHome Dashboard.
 2. In Home Assistant, navigate to **Settings > Devices & Services > ESPHome**, and your new `ESP_Leaf` node should be discovered automatically.
-3. Open the `leafwifize1.yaml` file, copy everthing below `- captive portal:` and paste it below your existing config from ESPHome.
+3. Open the `leafwifize1.yaml` file, copy everthing below `captive_portal:` and paste it below your existing config from ESPHome.
 4. Install the module in your car.
 
 ---
