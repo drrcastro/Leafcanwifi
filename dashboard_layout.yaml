@@ -1,0 +1,198 @@
+views:
+  - title: Leaf
+    path: leaf
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Nissan Leaf
+            heading_style: title
+            icon: mdi:car-electric
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_car_status
+                name: Estado
+                icon: mdi:car
+                icon_color: >-
+                  {% if
+                  is_state('sensor.garagem_leaf_esp_charge_status','Charging')
+                  %} green  {% elif
+                  is_state('sensor.garagem_leaf_esp_charge_status','Plugged/Standby')
+                  %} amber  {% else %} blue {% endif %}
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_gear_shift
+                name: Mudança
+                icon: mdi:car-shift-pattern
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_charge_status
+                name: Carregamento
+                icon: mdi:ev-station
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_guess_o_meter_range
+                name: Autonomia
+                icon: mdi:map-marker-distance
+                icon_color: green
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_eco_mode
+                name: Eco Mode
+                icon_color: green
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_hv_supply_status
+                name: HV
+                icon: mdi:flash
+          - type: heading
+            heading: Bateria
+            icon: mdi:battery
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.garagem_leaf_esp_lbc_soc
+                name: SOC
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 50
+                  yellow: 25
+                  red: 0
+              - type: gauge
+                entity: sensor.garagem_leaf_esp_calculated_energy_soc
+                name: Energia
+                min: 0
+                max: 100
+                needle: true
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_remaining_energy
+                name: Energia Restante
+              - entity: sensor.garagem_leaf_esp_full_capacity
+                name: Capacidade Total
+              - entity: sensor.garagem_leaf_esp_state_of_health_soh
+                name: SOH (Saúde)
+              - entity: sensor.garagem_leaf_esp_gids
+                name: GIDs
+              - entity: sensor.garagem_leaf_esp_bms_active_balancing_shunts
+                name: Células a Balancear (BMS)
+      - type: grid
+        cards:
+          - type: heading
+            heading: Dinâmica
+            icon: mdi:car-speed-limiter
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_accelerator_pedal
+                name: Pedal do Acelerador
+              - entity: sensor.garagem_leaf_esp_motor_rpm
+                name: Rotações do Motor
+              - entity: sensor.garagem_leaf_esp_motor_torque
+                name: Binário (Torque)
+          - type: heading
+            heading: Potência
+            icon: mdi:lightning-bolt
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_hv_battery_voltage
+              - entity: sensor.garagem_leaf_esp_hv_battery_current
+              - entity: sensor.garagem_leaf_esp_hv_instant_power
+              - entity: sensor.garagem_leaf_esp_max_discharge_power
+              - entity: sensor.garagem_leaf_esp_max_charge_power
+      - type: grid
+        cards:
+          - type: heading
+            heading: Temperaturas
+            icon: mdi:thermometer
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_battery_temperature_dash
+                name: Ecrã
+                icon_color: >-
+                  {% if
+                  states('sensor.garagem_leaf_esp_battery_temperature_dash')|float
+                  > 70 %} red  {% elif
+                  states('sensor.garagem_leaf_esp_battery_temperature_dash')|float
+                  > 50 %} orange  {% else %} green {% endif %}
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_motor_temperature
+                name: Motor
+                icon_color: orange
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_inverter_temperature
+                name: Inversor
+                icon_color: red
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_battery_temperature
+                name: Bateria (Média)
+              - entity: sensor.garagem_leaf_esp_igbt_temperature
+                name: Módulo IGBT
+          - type: heading
+            heading: Climatização
+            icon: mdi:air-conditioner
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_hvac_status
+                name: HVAC
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_cabin_temperature
+                name: Habitáculo
+                icon_color: cyan
+              - type: custom:mushroom-entity-card
+                entity: sensor.garagem_leaf_esp_ambient_temperature_ac
+                name: Exterior AC
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_hvac_fan_speed
+                name: Ventoinha
+              - entity: sensor.garagem_leaf_esp_hvac_vent_mode
+                name: Direção do Ar
+              - entity: sensor.garagem_leaf_esp_hvac_intake_mode
+                name: Admissão
+              - entity: sensor.garagem_leaf_esp_ac_power_consumption
+                name: Consumo do Compressor
+              - entity: sensor.garagem_leaf_esp_heater_power_consumption
+                name: Consumo do Aquecedor
+      - type: grid
+        cards:
+          - type: heading
+            heading: EVSE / OBC
+            icon: mdi:ev-plug-type2
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_obc_max_power
+              - entity: sensor.garagem_leaf_esp_obc_ac_voltage_status
+              - entity: sensor.garagem_leaf_esp_charge_power_status
+              - entity: sensor.garagem_leaf_esp_remaining_charge_time
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sistema
+            icon: mdi:cog
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_main_relay_status
+              - entity: sensor.garagem_leaf_esp_hv_interlock
+              - entity: sensor.garagem_leaf_esp_voltage_latch
+              - entity: sensor.garagem_leaf_esp_hv_supply_status
+              - entity: sensor.garagem_leaf_esp_relay_plus_status
+      - type: grid
+        cards:
+          - type: heading
+            heading: Diagnóstico & 12V
+            icon: mdi:bug-check
+          - type: entities
+            entities:
+              - entity: sensor.garagem_leaf_esp_12v_battery_voltage
+                name: Tensão Bateria 12V
+              - entity: switch.garagem_leaf_esp_debug_polling_mode
+                name: Forçar Polling (Debug)
+              - entity: button.garagem_leaf_esp_force_can_poll
+                name: Ping CAN Manual
+              - entity: button.garagem_leaf_esp_restart_leaf_module
+                name: Reiniciar Módulo ESP
