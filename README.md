@@ -5,7 +5,7 @@
 ![Nissan Leaf](https://img.shields.io/badge/Vehicle-Nissan_Leaf_ZE1-blue?style=for-the-badge&logo=nissan)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-A powerful, custom-built ESPHome integration to read, decode, and transmit real-time CAN bus data from a Nissan Leaf ZE1 (40kWh / 62kWh) directly to Home Assistant. 
+A  ESPHome integration to read and decode real-time CAN bus data from a Nissan Leaf ZE1 (40kWh / 62kWh) directly to Home Assistant. 
 
 This project uses an **ESP32-C3 SuperMini** paired with an **SN65HVD230** CAN transceiver to sniff the **EV-CAN** bus, providing deep telemetry without interfering with the vehicle's normal operation.
 
@@ -18,7 +18,6 @@ This integration has been fine-tuned to solve several known quirks of the Nissan
 * **🔋 Advanced Battery Telemetry:** Real-time monitoring of SOC, GIDs, SOH, High Voltage, Current, and Instant Power (kW).
 * **🧠 BMS Smart Filtering:** The Leaf's `0x5BC` frame multiplexes the actual GIDs with the dashboard's max scale (500). This code includes a custom C++ state-machine to filter out the scale, providing a clean, bounce-free GIDs graph.
 * **❄️ Climate Control Decoded:** Tracks HVAC status, vent modes, intake modes, compressor power, and PTC heater power. 
-* **👻 Ghost Temperature Fix:** Prevents the infamous "55ºC Cabin Temperature" spike. The Leaf broadcasts `0x83` (131 decimal) when the climate unit is OFF. This code actively ignores placeholder bytes, keeping your graphs accurate.
 * **🛡️ Smart Polling (12V Battery Protection):** Active polling for 12V battery stats is only triggered when the car is `ON`, `ACC`, or `Charging`. When the car sleeps, the ESP32 passively listens, preventing vampire drain on the 12V battery.
 
 ### 🌐 Web Fallback UI
