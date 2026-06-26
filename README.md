@@ -23,7 +23,7 @@ This integration has been fine-tuned to solve several known quirks of the Nissan
 ### 🌐 Web Fallback UI
 Features a modern, standalone web server (ESPHome Web UI v3) to access real-time car data directly via the ESP's IP or Fallback Hotspot, even if Home Assistant is offline.
 
-![ESPHome Web Fallback UI](screenshots/Fallback.png)
+![ESPHome Web Fallback UI](screenshots/fallback_page.png)
 *(Example of the ESPHome Web UI displaying real-time data)*
 
 ---
