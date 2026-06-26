@@ -22,13 +22,13 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
-    ssid: ESP_Leaf Fallback Hotspot
-    password: "XmXcQwAbdbRz"
+    ssid: LeafCAN
+    password: "12345678"
 
 captive_portal:
 
 # ==============================================================================
-# NISSAN LEAF ZE1 - CAN MONITOR V5 (Full Engineering - EV-CAN Only)
+# NISSAN LEAF ZE1 - CAN MONITOR  (Listen-Only Release)
 # ESP32-C3 Super Mini + SN65HVD230
 # EV-CAN | TX=GPIO4 | RX=GPIO3 | 500 kbps
 # ==============================================================================
@@ -39,13 +39,18 @@ logger:
     canbus: WARN
     esp32_can: WARN
 
-web_server:
-  port: 80
-
 time:
   - platform: sntp
     id: sntp_time
     timezone: "Europe/Lisbon"
+
+# ==============================================================================
+# WEB SERVER (Modern UI)
+# ==============================================================================
+web_server:
+  port: 80
+  version: 3
+  include_internal: true
 
 # ------------------------------------------------------------------------------
 # GLOBALS
@@ -108,7 +113,7 @@ light:
     chipset: WS2812
 
 # ==============================================================================
-# CAN BUS
+# CAN BUS (LISTEN ONLY)
 # ==============================================================================
 canbus:
   - platform: esp32_can
@@ -143,9 +148,6 @@ canbus:
                 else if (car_on == 2 || car_on == 3) id(car_status_sensor).publish_state("ON");
                 else if (car_on == 4) id(car_status_sensor).publish_state("Charging/Standby");
                 else id(car_status_sensor).publish_state("Unknown");
-
-                bool eco_selected = x[0] & 0x40;
-                id(eco_mode_sensor).publish_state(eco_selected ? "On" : "Off");
               }
 
       # --------------------------------------------------------------------------
@@ -191,11 +193,9 @@ canbus:
           - lambda: |-
               if (x.size() >= 6) {
 
-                // ========================
                 // CURRENT
-                // ========================
                 int16_t raw_current = ((x[0] << 3) | (x[1] >> 5)) & 0x7FF;
-                if (raw_current & 0x400) raw_current |= 0xF800; // Sign extend for negative values
+                if (raw_current & 0x400) raw_current |= 0xF800;
                 float current = raw_current * 0.5;
 
                 if (fabs(current) < 400.0) {
@@ -205,9 +205,7 @@ canbus:
                   }
                 }
 
-                // ========================
                 // VOLTAGE
-                // ========================
                 uint16_t raw_voltage = ((x[2] << 2) | (x[3] >> 6)) & 0x3FF;
                 float voltage = raw_voltage * 0.5;
 
@@ -218,9 +216,7 @@ canbus:
                   }
                 }
 
-                // ========================
                 // POWER
-                // ========================
                 float power_kw = (id(last_current) * id(last_voltage)) / 1000.0;
 
                 if (fabs(power_kw) < 150.0) {
@@ -442,7 +438,7 @@ canbus:
               }
 
       # --------------------------------------------------------------------------
-      # 0x59E - Battery energy
+      # 0x59E - Battery Energy and Charge Estimates
       # --------------------------------------------------------------------------
       - can_id: 0x59E
         use_extended_id: false
@@ -470,20 +466,32 @@ canbus:
                   if (calculated_soc >= 0.0 && calculated_soc <= 100.0) {
                     id(calculated_energy_soc_sensor).publish_state(calculated_soc);
                   }
+                  
+                  // --- PHYSICAL CHARGE TIME CALCULATION ---
+                  // Using actual missing_kwh and constants extracted from the dashboard
+                  float missing_kwh = (id(full_capacity_wh) - id(remaining_energy_wh)) / 1000.0;
+                  if (missing_kwh < 0) missing_kwh = 0;
+                  
+                  float time_3kw = (missing_kwh / 2.6) * 60.0;  // 13h30
+                  float time_6kw = (missing_kwh / 3.9) * 60.0;  // 9h00
+                  float time_qc = (missing_kwh / 23.0) * 60.0;  // 1h30
+
+                  id(remaining_charge_time_3kw_sensor).publish_state(time_3kw);
+                  id(remaining_charge_time_6kw_sensor).publish_state(time_6kw);
+                  id(remaining_charge_time_qc_sensor).publish_state(time_qc);
                 }
               }
 
       # --------------------------------------------------------------------------
-      # 0x5BC - GIDs, SOH, bars, remaining time
+      # 0x5BC - GIDs, SOH and Dashboard Temperature
       # --------------------------------------------------------------------------
       - can_id: 0x5BC
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 8) {
+                // --- GIDs ---
                 uint16_t gids = ((x[0] << 2) | (x[1] >> 6)) & 0x3FF;
-
-                // Filter to ignore the "Max Scale" (500) multiplexed frame
                 static uint16_t last_valid_gids = 0;
                 int diff = (int)gids - (int)last_valid_gids;
 
@@ -491,42 +499,23 @@ canbus:
                   if (last_valid_gids == 0 || std::abs(diff) < 50) {
                     last_valid_gids = gids;
                     id(gids_sensor).publish_state(gids);
-                  } else if (gids != 500) {
+                  } else if (gids != 500) { 
                     last_valid_gids = gids;
                     id(gids_sensor).publish_state(gids);
                   }
                 }
 
+                // --- SOH ---
                 uint8_t soh = (x[4] >> 1) & 0x7F;
                 if (soh > 0 && soh <= 100) {
                   id(soh_sensor).publish_state(soh);
                 }
 
-                uint8_t mux = x[4] & 0x0F;
-
-                if (mux == 8) {
-                  uint8_t charge_bars = (x[2] >> 4) & 0x0F;
-                  id(charge_bars_sensor).publish_state(charge_bars);
-                } else if (mux == 9) {
-                  uint8_t capacity_bars = (x[2] >> 4) & 0x0F;
-                  id(capacity_bars_sensor).publish_state(capacity_bars);
-                }
-
+                // --- Dashboard Temperature ---
                 uint8_t temp_dash_raw = x[3];
                 float temp_dash_percent = temp_dash_raw * 0.4166666;
                 if (temp_dash_percent >= 0.0 && temp_dash_percent <= 100.0) {
                   id(battery_temp_dash_sensor).publish_state(temp_dash_percent);
-                }
-
-                uint16_t remain_charge_time = ((x[6] & 0x1F) << 8) | x[7];
-
-                if (id(is_charging)) {
-                  if (remain_charge_time > 0 && remain_charge_time < 1000) {
-                    if (id(last_charge_time) == 0 || fabs(remain_charge_time - id(last_charge_time)) < 60) {
-                      id(last_charge_time) = remain_charge_time;
-                      id(remaining_charge_time_sensor).publish_state(remain_charge_time);
-                    }
-                  }
                 }
               }
 
@@ -566,88 +555,6 @@ canbus:
                 id(battery_heater_dtc_sensor).publish_state(x[7]);
               }
 
-      # --------------------------------------------------------------------------
-      # 0x79A - VCM response: 12V battery
-      # --------------------------------------------------------------------------
-      - can_id: 0x79A
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 5) {
-                uint8_t pid = x[3];
-
-                if (pid == 0x03) {
-                  float v12 = x[4] * 0.08;
-
-                  if (v12 > 8.0 && v12 < 16.0) {
-                    id(bat_12v_voltage_sensor).publish_state(v12);
-                  }
-                }
-              }
-
-      # ========================================================================
-      # GOM PACKAGE (Guess-O-Meter / Estimated Range)
-      # ========================================================================
-      - can_id: 0x5A9
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 3) {
-                // Approximate calculation of dashboard km estimate
-                uint16_t raw_gom = ((x[1] << 4) | (x[2] >> 4)) & 0x3FF;
-                float gom_km = raw_gom * 0.2; 
-                
-                static float last_gom = -1.0;
-                // Only updates if changed by 1 km
-                if (gom_km > 0 && gom_km < 600 && fabs(gom_km - last_gom) >= 1.0) {
-                  last_gom = gom_km;
-                  id(gom_sensor).publish_state(gom_km);
-                }
-              }
-
-      # ========================================================================
-      # "HEAVY FOOT" PACKAGE (Accelerator, RPM and Torque)
-      # ========================================================================
-      - can_id: 0x1D5
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 1) {
-                float accel_pct = x[0] * 0.4; // 0 to 100%
-                
-                static float last_accel = -1.0;
-                // Only updates if pedal pressure changes by more than 2%
-                if (fabs(accel_pct - last_accel) >= 2.0) {
-                  last_accel = accel_pct;
-                  id(accelerator_sensor).publish_state(accel_pct);
-                }
-              }
-
-      - can_id: 0x1DA
-        use_extended_id: false
-        then:
-          - lambda: |-
-              if (x.size() >= 6) {
-                // Motor RPM (Signed 16-bit)
-                int16_t rpm = (x[4] << 8) | x[5];
-                static int16_t last_rpm = -9999;
-                if (abs(rpm - last_rpm) >= 50) { // Updates every 50 RPM
-                  last_rpm = rpm;
-                  id(motor_rpm_sensor).publish_state(rpm);
-                }
-
-                // Torque (Nm) - Positive=Accelerate, Negative=Regenerate
-                int16_t raw_torque = ((x[2] << 3) | (x[3] >> 5)) & 0x7FF;
-                if (raw_torque & 0x400) raw_torque |= 0xF800; // Sign extend for negative values
-                float torque = raw_torque * 0.5;
-                
-                static float last_torque = -9999.0;
-                if (fabs(torque - last_torque) >= 5.0) { // Updates every 5 Nm
-                  last_torque = torque;
-                  id(motor_torque_sensor).publish_state(torque);
-                }
-              }
-
       # ========================================================================
       # BMS PACKAGE (Cell Balancing / Shunts)
       # ========================================================================
@@ -656,7 +563,6 @@ canbus:
         then: &bms_shunt_logic
           - lambda: |-
               // Count how many bits are '1' in the frame bytes
-              // Each bit at 1 means the BMS is bleeding energy from that cell
               int active_shunts = 0;
               for(int i=0; i<x.size(); i++) {
                 active_shunts += __builtin_popcount(x[i]); 
@@ -665,11 +571,9 @@ canbus:
               static int last_shunts = -1;
               if (active_shunts != last_shunts) {
                 last_shunts = active_shunts;
-                // Updates the total sensor (simplified, sums only the current ID)
                 id(bms_active_shunts_sensor).publish_state(active_shunts);
               }
       
-      # Reuses the same counting logic for other shunt IDs
       - can_id: 0x502
         use_extended_id: false
         then: *bms_shunt_logic
@@ -730,22 +634,6 @@ sensor:
     icon: "mdi:car-battery"
 
   - platform: template
-    name: "Charge Bars"
-    id: charge_bars_sensor
-    unit_of_measurement: "bars"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:battery-50"
-
-  - platform: template
-    name: "Capacity Bars"
-    id: capacity_bars_sensor
-    unit_of_measurement: "bars"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:battery-heart"
-
-  - platform: template
     name: "Remaining Energy"
     id: remaining_energy_sensor
     unit_of_measurement: "kWh"
@@ -764,12 +652,28 @@ sensor:
     icon: "mdi:battery-high"
 
   - platform: template
-    name: "Remaining Charge Time"
-    id: remaining_charge_time_sensor
+    name: "Remaining Time (3kW Plug)"
+    id: remaining_charge_time_3kw_sensor
     unit_of_measurement: "min"
     state_class: measurement
     accuracy_decimals: 0
-    icon: "mdi:timer-outline"
+    icon: "mdi:ev-plug-type2"
+
+  - platform: template
+    name: "Remaining Time (6kW Wallbox)"
+    id: remaining_charge_time_6kw_sensor
+    unit_of_measurement: "min"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:wall-sconce-flat"
+
+  - platform: template
+    name: "Remaining Time (50kW QC)"
+    id: remaining_charge_time_qc_sensor
+    unit_of_measurement: "min"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:ev-plug-chademo"
 
   - platform: template
     name: "HV Battery Voltage"
@@ -964,52 +868,9 @@ sensor:
     accuracy_decimals: 2
     icon: "mdi:radiator"
 
-  - platform: template
-    name: "12V Battery Voltage"
-    id: bat_12v_voltage_sensor
-    unit_of_measurement: "V"
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 2
-    icon: "mdi:car-battery"
-
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
-
-  # --- GOM and Dynamics Sensors ---
-  - platform: template
-    name: "Guess-O-Meter (Range)"
-    id: gom_sensor
-    unit_of_measurement: "km"
-    device_class: distance
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:map-marker-distance"
-
-  - platform: template
-    name: "Accelerator Pedal"
-    id: accelerator_sensor
-    unit_of_measurement: "%"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:car-speed-limiter"
-
-  - platform: template
-    name: "Motor RPM"
-    id: motor_rpm_sensor
-    unit_of_measurement: "RPM"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:engine-outline"
-
-  - platform: template
-    name: "Motor Torque"
-    id: motor_torque_sensor
-    unit_of_measurement: "Nm"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: "mdi:rotate-3d-variant"
 
   # --- BMS Sensor ---
   - platform: template
@@ -1035,11 +896,6 @@ text_sensor:
     icon: "mdi:car-info"
 
   - platform: template
-    name: "Eco Mode"
-    id: eco_mode_sensor
-    icon: "mdi:leaf"
-
-  - platform: template
     name: "Charge Status"
     id: charge_status_sensor
     icon: "mdi:ev-station"
@@ -1060,26 +916,6 @@ text_sensor:
     icon: "mdi:snowflake"
 
   - platform: template
-    name: "Main Relay Status"
-    id: main_relay_sensor
-    icon: "mdi:electric-switch"
-
-  - platform: template
-    name: "Full Charge Flag"
-    id: full_charge_sensor
-    icon: "mdi:battery-check"
-
-  - platform: template
-    name: "HV Interlock"
-    id: interlock_sensor
-    icon: "mdi:shield-alert"
-
-  - platform: template
-    name: "Voltage Latch"
-    id: voltage_latch_sensor
-    icon: "mdi:lock-alert"
-
-  - platform: template
     name: "HV Supply Status"
     id: hv_supply_status_sensor
     icon: "mdi:flash"
@@ -1088,16 +924,6 @@ text_sensor:
     name: "Relay Plus Status"
     id: relay_plus_status_sensor
     icon: "mdi:electric-switch"
-
-  - platform: template
-    name: "Charge Power Status"
-    id: charge_power_status_sensor
-    icon: "mdi:battery-arrow-up"
-
-  - platform: template
-    name: "OBC AC Voltage Status"
-    id: obc_ac_voltage_status_sensor
-    icon: "mdi:ev-plug-type2"
 
   - platform: template
     name: "Battery Heater Start"
@@ -1147,14 +973,14 @@ button:
     name: "Restart Leaf Module"
 
   - platform: template
-    name: "Force CAN Poll"
+    name: "Wake EV-CAN Bus"
     id: force_can_poll_button
     icon: "mdi:radar"
     on_press:
       - script.execute: send_can_queries
 
 # ==============================================================================
-# ACTIVE POLLING (SMART POLLING + DEBUG MODE)
+# PASSIVE WAKE-UP
 # ==============================================================================
 interval:
   - interval: 15s
@@ -1174,7 +1000,7 @@ script:
   - id: send_can_queries
     mode: queued
     then:
-      # Wake up the bus
+      # Send a simple wake-up frame to keep the bus alive if needed
       - repeat:
           count: 10
           then:
@@ -1183,14 +1009,3 @@ script:
                 can_id: 0x56E
                 use_extended_id: false
             - delay: 50ms
-
-      - delay: 300ms
-
-      # --------------------------------------------------------------------------
-      # VCM polling: query 0x797, response 0x79A
-      # 12V battery
-      # --------------------------------------------------------------------------
-      - canbus.send:
-          data: [0x03, 0x22, 0x11, 0x03, 0x00, 0x00, 0x00, 0x00]
-          can_id: 0x797
-          use_extended_id: false
