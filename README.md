@@ -23,7 +23,7 @@ This integration has been fine-tuned to solve several known quirks of the Nissan
 ### 🌐 Web Fallback UI
 Features a modern, standalone web server (ESPHome Web UI v3) to access real-time car data directly via the ESP's IP or Fallback Hotspot, even if Home Assistant is offline.
 
-![ESPHome Web Fallback UI](screenshot.png)
+![ESPHome Web Fallback UI](screenshots/Fallback.png)
 *(Example of the ESPHome Web UI displaying real-time data)*
 
 ---
@@ -33,9 +33,9 @@ Features a modern, standalone web server (ESPHome Web UI v3) to access real-time
 To build this project, you will need the following components. Here are the exact parts used in this build:
 
 1. **Microcontroller:** [ESP32-C3 SuperMini](https://pt.aliexpress.com/item/1005009897797706.html)
-2. **CAN Transceiver:** [SN65HVD230 (3.3V)](https://pt.aliexpress.com/item/1005006738154651.html)
-3. **Connectors / Cables:** [OBD2 / J1939 Adapters](https://pt.aliexpress.com/item/1005006245122273.html)
-4. **Power Supply:** [12V to 5V Step Down Converter](https://pt.aliexpress.com/item/1005006734943258.html) *(to power the ESP32 safely from the car's 12V line)*
+2. **CAN Transceiver:** [SN65HVD230 (3.3V)](https://pt.aliexpress.com/item/1005006734943258.html)
+3. **Connectors / Cables:** [24p Extension](https://pt.aliexpress.com/item/1005006738154651.html)
+4. **Power Supply:** [12V to 3V3 Step Down Converter](https://pt.aliexpress.com/item/1005006245122273.html) *(to power the ESP32 safely from the car's 12V line)*
 
 ---
 
@@ -54,8 +54,7 @@ The SN65HVD230 transceiver runs at 3.3V, making it perfectly safe for direct con
 To read traction battery and inverter data, you must connect to the **EV-CAN**. 
 * **CAN-H:** Connect to EV-CAN High
 * **CAN-L:** Connect to EV-CAN Low
-![CAN Gateway Pinout](gateway.jpg)
-> ⚠️ **Note on Odometer and TPMS:** The Nissan Leaf uses multiple CAN networks. The Odometer, Tire Pressures (TPMS), and door statuses reside on the **CAR-CAN**. Because this hardware is connected strictly to the **EV-CAN**, those specific sensors are out of scope for this firmware.
+![CAN Gateway Pinout](images/gateway.jpg)
 
 ---
 
@@ -76,7 +75,7 @@ Want a beautiful interface right out of the box? I have designed a custom Lovela
 2. Create a new View in your Home Assistant Dashboard.
 3. Edit the View in YAML mode and paste the contents of the `dashboard_layout.yaml` file (found in this repository).
 
-![Home Assistant Dashboard](hadashboard.png)
+![Home Assistant Dashboard](screenshots/HA_dashboard.png)
 *(Custom Home Assistant Dashboard for Nissan Leaf ZE1)*
 
 ---
@@ -84,7 +83,6 @@ Want a beautiful interface right out of the box? I have designed a custom Lovela
 ## 🐛 Debugging & Manual Polling
 
 This integration exposes a **Diagnostic & 12V** section in Home Assistant:
-* **Force CAN Poll (Button):** Manually sends a wake-up frame and queries the VCM for immediate data updates.
 * **Debug Polling Mode (Switch):** Overrides the Smart Polling safety feature. When toggled ON, the ESP32 will aggressively poll the CAN bus every 15 seconds, regardless of whether the car is ON or OFF. **Use only for temporary debugging to avoid draining your 12V battery!**
 
 ---
