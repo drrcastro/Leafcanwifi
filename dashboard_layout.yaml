@@ -33,6 +33,17 @@ views:
           - type: horizontal-stack
             cards:
               - type: custom:mushroom-entity-card
+                entity: switch.smart_plug_2_tomada_1
+                name: EV Charger
+                icon: mdi:ev-plug-type2
+                icon_color: green
+                tap_action:
+                  action: toggle
+              - type: custom:mushroom-entity-card
+                entity: sensor.smart_plug_2_potencia
+                icon_color: green
+                name: Power
+              - type: custom:mushroom-entity-card
                 entity: sensor.garagem_leaf_esp_hv_supply_status
                 name: HV
                 icon: mdi:flash
@@ -144,9 +155,9 @@ views:
           - type: entities
             entities:
               - entity: sensor.garagem_leaf_esp_obc_max_power
-              - entity: sensor.garagem_leaf_esp_remaining_charge_time_qc_sensor
-              - entity: sensor.garagem_leaf_esp_remaining_charge_time_3kw_sensor
-              - entity: sensor.garagem_leaf_esp_remaining_charge_time_6kw_sensor
+              - entity: sensor.garagem_leaf_esp_remaining_time_50kw_qc
+              - entity: sensor.garagem_leaf_esp_remaining_time_6kw_wallbox
+              - entity: sensor.garagem_leaf_esp_remaining_time_3kw_plug
           - type: heading
             heading: System
             icon: mdi:cog
