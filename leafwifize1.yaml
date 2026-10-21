@@ -559,6 +559,80 @@ canbus:
       # ========================================================================
       # BMS PACKAGE (Cell Balancing / Shunts)
       # ========================================================================
+      - can_id: 0x7BB
+        use_extended_id: false
+        then:
+          - lambda: |-
+              static uint8_t response[32] = {};
+              static uint16_t expected_length = 0;
+              static uint16_t received_length = 0;
+              static uint8_t expected_sequence = 1;
+              static uint32_t last_frame_ms = 0;
+
+              if (x.size() < 8) {
+                return;
+              }
+
+              const uint8_t frame_type = x[0] >> 4;
+              const uint32_t now = millis();
+              if (received_length > 0 && now - last_frame_ms > 1000) {
+                received_length = 0;
+                expected_length = 0;
+              }
+
+              if (frame_type == 1) {
+                const uint16_t message_length =
+                    ((x[0] & 0x0F) << 8) | x[1];
+                if (message_length < 14 || message_length > sizeof(response) ||
+                    x[2] != 0x61 || x[3] != 0x06) {
+                  received_length = 0;
+                  expected_length = 0;
+                  return;
+                }
+
+                expected_length = message_length;
+                received_length = 6;
+                expected_sequence = 1;
+                for (int i = 0; i < 6; i++) {
+                  response[i] = x[i + 2];
+                }
+                last_frame_ms = now;
+                id(bms_shunt_flow_control).execute();
+                return;
+              }
+
+              if (frame_type != 2 || expected_length == 0 ||
+                  (x[0] & 0x0F) != expected_sequence) {
+                return;
+              }
+
+              for (int i = 1; i < 8 && received_length < expected_length; i++) {
+                response[received_length++] = x[i];
+              }
+              expected_sequence = (expected_sequence + 1) & 0x0F;
+              last_frame_ms = now;
+
+              if (received_length == expected_length) {
+                // Group 6 returns service/group bytes followed by 12 packed shunt bytes.
+                uint8_t shunt_nibbles[24];
+                for (int i = 0; i < 12; i++) {
+                  const uint8_t value = response[i + 2];
+                  shunt_nibbles[i * 2] = value & 0x0F;
+                  shunt_nibbles[i * 2 + 1] = value >> 4;
+                }
+
+                const uint8_t shunt_order[4] = {8, 4, 2, 1};
+                int active_shunts = 0;
+                for (int i = 0; i < 96; i++) {
+                  if (shunt_nibbles[i / 4] & shunt_order[i % 4]) {
+                    active_shunts++;
+                  }
+                }
+                id(bms_group_6_active_shunts_sensor).publish_state(active_shunts);
+                received_length = 0;
+                expected_length = 0;
+              }
+
       - can_id: 0x501
         use_extended_id: false
         then: &bms_shunt_logic
@@ -882,6 +956,14 @@ sensor:
     accuracy_decimals: 0
     icon: "mdi:battery-sync"
 
+  - platform: template
+    name: "BMS Group 6 Active Shunts"
+    id: bms_group_6_active_shunts_sensor
+    unit_of_measurement: "cells"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:battery-sync"
+
 # ==============================================================================
 # TEXT SENSORS
 # ==============================================================================
@@ -997,7 +1079,36 @@ interval:
           then:
             - script.execute: send_can_queries
 
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(debug_polling_switch).state ||
+                     id(is_charging) ||
+                     id(car_status_sensor).state == "ON" ||
+                     id(car_status_sensor).state == "ACC" ||
+                     id(car_status_sensor).state == "Charging/Standby";
+          then:
+            - script.execute: request_bms_group_6
+
 script:
+  - id: request_bms_group_6
+    mode: single
+    then:
+      - canbus.send:
+          can_id: 0x79B
+          use_extended_id: false
+          data: [0x02, 0x21, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+  - id: bms_shunt_flow_control
+    mode: single
+    then:
+      - canbus.send:
+          can_id: 0x79B
+          use_extended_id: false
+          data: [0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
   - id: send_can_queries
     mode: queued
     then:

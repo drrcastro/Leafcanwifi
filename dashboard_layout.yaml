@@ -80,6 +80,8 @@ views:
                 name: GIDs
               - entity: sensor.garagem_leaf_esp_bms_active_balancing_shunts
                 name: Active Balancing Cells (BMS)
+              - entity: sensor.garagem_leaf_esp_bms_group_6_active_shunts
+                name: Active Balancing Cells (Group 6)
       - type: grid
         cards:
           - type: heading
