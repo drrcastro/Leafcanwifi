@@ -1,47 +1,43 @@
-# 🍃 Nissan Leaf ZE1 - ESPHome CAN Monitor [BETA]
+# 🍃 Nissan Leaf ZE1 - ESPHome CAN Monitor (v2.0 Stable)
 
-![ESPHome](https://img.shields.io/badge/ESPHome-Ready-00A69D?style=for-the-badge&logo=esphome&logoColor=white)
+![ESPHome](https://img.shields.io/badge/ESPHome-2026.x_Ready-00A69D?style=for-the-badge&logo=esphome&logoColor=white)
 ![Home Assistant](https://img.shields.io/badge/Home_Assistant-Integration-41BDF5?style=for-the-badge&logo=home-assistant&logoColor=white)
 ![Nissan Leaf](https://img.shields.io/badge/Vehicle-Nissan_Leaf_ZE1-blue?style=for-the-badge&logo=nissan)
+![Version](https://img.shields.io/badge/Version-v2.0_Stable-brightgreen?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-A  ESPHome integration to read and decode real-time CAN bus data from a Nissan Leaf ZE1 (40kWh / 62kWh) directly to Home Assistant. 
+A powerful, full-featured ESPHome integration to read, query, and decode real-time CAN bus telemetry and deep BMS diagnostics from a **Nissan Leaf ZE1 (40kWh / 62kWh)** directly into Home Assistant.
 
-This project uses an **ESP32-C3 SuperMini** paired with an **SN65HVD230** CAN transceiver to sniff the **EV-CAN** bus, providing deep telemetry without interfering with the vehicle's normal operation.
+This project utilizes an **ESP32-C3 SuperMini** paired with an **SN65HVD230** CAN transceiver connected to the vehicle's **EV-CAN** bus. It combines passive frame sniffing with a custom ISO-TP polling engine to extract leafspy-grade metrics without interfering with vehicle safety systems.
 
 ---
 
 ## ✨ Features & Engineering Highlights
 
-This integration has been fine-tuned to solve several known quirks of the Nissan Leaf CAN bus:
-
-* **🔋 Advanced Battery Telemetry:** Real-time monitoring of SOC, GIDs, SOH, High Voltage, Current, and Instant Power (kW).
-* **🧠 BMS Smart Filtering:** The Leaf's `0x5BC` frame multiplexes the actual GIDs with the dashboard's max scale (500). This code includes a custom C++ state-machine to filter out the scale, providing a clean, bounce-free GIDs graph.
-* **❄️ Climate Control Decoded:** Tracks HVAC status, vent modes, intake modes, compressor power, and PTC heater power. 
-* **🛡️ Smart Polling (12V Battery Protection):** Active polling for 12V battery stats is only triggered when the car is `ON`, `ACC`, or `Charging`. When the car sleeps, the ESP32 passively listens, preventing vampire drain on the 12V battery.
-
-### 🌐 Web Fallback UI
-Features a modern, standalone web server (ESPHome Web UI v3) to access real-time car data directly via the ESP's IP or Fallback Hotspot, even if Home Assistant is offline.
-
-![ESPHome Web Fallback UI](screenshots/fallback_page.png)
-*(Example of the ESPHome Web UI displaying real-time data)*
+- 🧠 **Non-Blocking ISO-TP BMS Engine:** Features an asynchronous C++ state machine operating inside ESPHome's `on_loop`. Automatically manages multi-frame transfers, flow control (`0x79B`/`0x7BB`), timeouts, and smart retries for querying BMS diagnostic groups (`0x01`, `0x02`, `0x04`, `0x06`, `0x61`, `0x84`).
+- 🔋 **96 Cell-Level Voltage Monitoring:** Decodes individual cell voltages in millivolts (mV) across the entire pack, providing real-time tracking for `Cell Min Voltage`, `Cell Max Voltage`, and `Cell Delta Voltage`.
+- 🌡️ **4-Point Pack Temperature Array:** Directly reads all 4 internal NTC thermistor sensors inside the high-voltage battery pack alongside motor, inverter, IGBT, and ambient temperatures.
+- 📈 **Deep Battery Health & Telemetry:** Extracts native battery health ($HX$), battery capacity in Amp-hours ($Ahr$), high-precision decimal SOH, dual LBC current sensors, insulation resistance, and the battery pack's native serial number.
+- ⚖️ **Accurate Cell Balancing / Shunt Tracking:** Corrected 96-cell shunt bitmask decoding (Group `0x06`) combined with passive broadcast monitoring (`0x501`–`0x504`) during charging sessions.
+- 🔌 **Physical Charge Time Estimates:** Physical mathematical calculations for 3 kW plug, 6 kW wallbox, and 50 kW Quick Charge completion times based on actual kWh energy deficit.
+- 🔴🟢 **Dynamic WS2812 RGB Status LED:** Visual status diagnostics (**Green** = Active CAN traffic within 5s; **Red** = CAN bus offline / timeout).
+- ❄️ **HVAC & Climate Diagnostics:** Decodes climate control states, vent modes, intake source, fan voltage/speed, AC power consumption, and PTC heater power.
+- 🛡️ **Smart Battery Saver (12V Protection):** Diagnostic polling cycles only execute when the vehicle is `ON`, `ACC`, or `Charging`. When sleeping, the MCU drops to passive listening, preventing 12V vampire drain.
 
 ---
 
 ## 🛒 Hardware Requirements
 
-To build this project, you will need the following components. Here are the exact parts used in this build:
-
 1. **Microcontroller:** [ESP32-C3 SuperMini](https://pt.aliexpress.com/item/1005009897797706.html)
 2. **CAN Transceiver:** [SN65HVD230 (3.3V)](https://pt.aliexpress.com/item/1005006734943258.html)
-3. **Connectors / Cables:** [24p Extension](https://pt.aliexpress.com/item/1005006738154651.html)
-4. **Power Supply:** [12V to 3V3 Step Down Converter](https://pt.aliexpress.com/item/1005006245122273.html) *(to power the ESP32 safely from the car's 12V line)*
+3. **Connectors / Cables:** [24p Extension Harness](https://pt.aliexpress.com/item/1005006738154651.html)
+4. **Power Supply:** [12V to 3.3V Step-Down Converter](https://pt.aliexpress.com/item/1005006245122273.html) *(powers the ESP32 safely from the vehicle's 12V line)*
 
 ---
 
-## 🔌 Wiring & Schematic
+## 🔌 Wiring & Pinout
 
-The SN65HVD230 transceiver runs at 3.3V, making it perfectly safe for direct connection to the ESP32-C3.
+The SN65HVD230 transceiver runs natively at 3.3V logic, allowing direct connection to the ESP32-C3 SuperMini.
 
 | ESP32-C3 SuperMini | SN65HVD230 Transceiver |
 | :--- | :--- |
@@ -49,53 +45,54 @@ The SN65HVD230 transceiver runs at 3.3V, making it perfectly safe for direct con
 | `GND` | `GND` |
 | `GPIO4` | `TX` |
 | `GPIO3` | `RX` |
+| `GPIO8` | Onboard WS2812 RGB LED |
 
 ### Nissan Leaf EV-CAN Connection
-To read traction battery and inverter data, you must connect to the **EV-CAN**. 
-* **CAN-H:** Connect to EV-CAN High
-* **CAN-L:** Connect to EV-CAN Low
+Connect the transceiver to the vehicle's **EV-CAN** bus behind the gateway or OBD port:
+- **CAN-H:** Connect to EV-CAN High
+- **CAN-L:** Connect to EV-CAN Low
+
 ![CAN Gateway Pinout](images/gateway.jpg)
 
 ---
 
 ## 🚀 Installation
 
-1. Flash the code to your ESP32-C3 using the ESPHome Dashboard.
-2. In Home Assistant, navigate to **Settings > Devices & Services > ESPHome**, and your new `ESP_Leaf` node should be discovered automatically.
-3. Open the `leafwifize1.yaml` file, copy everthing below `captive_portal:` and paste it below your existing config from ESPHome.
-4. Install the module in your car.
+1. Copy the YAML code from `esp-leaf.yaml` into your ESPHome Dashboard.
+2. Update your Wi-Fi credentials and API encryption keys in your ESPHome `secrets.yaml`.
+3. Flash your ESP32-C3 SuperMini via USB or OTA.
+4. Mount the device in your Nissan Leaf ZE1 and power it up.
+5. Home Assistant will automatically discover the `ESP_Leaf` node via native API.
 
 ---
 
 ## 📊 Home Assistant Dashboard
 
-Want a beautiful interface right out of the box? I have designed a custom Lovelace dashboard layout using standard Home Assistant cards and [Mushroom Cards](https://github.com/piitaya/lovelace-mushroom) for a clean, modern look.
+A pre-configured Lovelace dashboard layout using [Mushroom Cards](https://github.com/piitaya/lovelace-mushroom) is available in `dashboard_layout.yaml`.
 
-1. Ensure you have **Mushroom Cards** installed via HACS.
+1. Install **Mushroom Cards** via HACS.
 2. Create a new View in your Home Assistant Dashboard.
-3. Edit the View in YAML mode and paste the contents of the `dashboard_layout.yaml` file (found in this repository).
+3. Edit the View in YAML mode and paste the contents of `dashboard_layout.yaml`.
 
 ![Home Assistant Dashboard](screenshots/HA_dashboard.png)
-*(Custom Home Assistant Dashboard for Nissan Leaf ZE1)*
 
 ---
 
-## 🐛 Debugging & Manual Polling
+## 🐛 Diagnostics & Manual Querying
 
-This integration exposes a **Diagnostic & 12V** section in Home Assistant:
-* **Debug Polling Mode (Switch):** Overrides the Smart Polling safety feature. When toggled ON, the ESP32 will aggressively poll the CAN bus every 15 seconds, regardless of whether the car is ON or OFF. **Use only for temporary debugging to avoid draining your 12V battery!**
+- **Wake EV-CAN Bus Button:** Triggers a manual sequential query across all BMS groups (`0x01`, `0x04`, `0x06`, `0x61`) to instantly refresh all sensors.
+- **Status LED Diagnostics:** 
+  - 🟢 **Solid Green:** Receiving valid CAN bus frames (< 5 seconds ago).
+  - 🔴 **Solid Red:** No CAN bus traffic detected (vehicle sleeping or disconnected).
 
 ---
 
 ## 🙏 Credits & Acknowledgments
 
-This project stands on the shoulders of giants within the open-source EV community:
-
-* **[CrAzYDr1veR](https://github.com/CrAzYDr1veR):** A huge thanks for the original repository that served as the initial foundation and fork for this project.
-* **[Dala the Great](https://github.com/dalathegreat):** The CAN bus decoding, formulas, and payload structures rely heavily on the extensive reverse-engineering work documented in his [leaf_can_bus_messages](https://github.com/dalathegreat/leaf_can_bus_messages) repository. 
-* **Gareth:** For the excellent and detailed hardware documentation, which made wiring and integration safe and straightforward. Check out his full write-up here: [Notes on integrating a Nissan Leaf ZE1 and Home Assistant](https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/).
-
-If you own a Leaf, be sure to check out their amazing work!
+- **[CrAzYDr1veR](https://github.com/CrAzYDr1veR):** Original foundation and early testing work for ESPHome Nissan Leaf integrations.
+- **[Dala the Great](https://github.com/dalathegreat):** Invaluable CAN bus reverse-engineering, DBC structures, and formulas documented in [leaf_can_bus_messages](https://github.com/dalathegreat/leaf_can_bus_messages).
+- **Gareth:** Detailed hardware documentation and integration notes at [Notes on integrating a Nissan Leaf ZE1 and Home Assistant](https://blog.jingo.uk/notes-on-integrating-a-nissan-leaf-ze1-and-home-assistant/).
 
 ---
-*Disclaimer: This project is for educational and diagnostic purposes. Connecting custom hardware to your vehicle's CAN bus carries inherent risks. I am not responsible for any damage to your vehicle, voided warranties, or drained 12V batteries.*
+
+*Disclaimer: This project is intended for educational and diagnostic purposes. Connecting third-party hardware to your vehicle's CAN bus carries inherent risks. Use at your own discretion.*
