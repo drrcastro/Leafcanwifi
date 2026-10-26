@@ -1,4 +1,4 @@
-# 🍃 Nissan Leaf ZE1 - ESPHome CAN Monitor (v2.0 Stable)
+# 🍃 Nissan Leaf ZE1 - ESPHome CAN Monitor
 
 ![ESPHome](https://img.shields.io/badge/ESPHome-2026.x_Ready-00A69D?style=for-the-badge&logo=esphome&logoColor=white)
 ![Home Assistant](https://img.shields.io/badge/Home_Assistant-Integration-41BDF5?style=for-the-badge&logo=home-assistant&logoColor=white)
