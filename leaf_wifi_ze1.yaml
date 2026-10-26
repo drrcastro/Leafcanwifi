@@ -1,7 +1,32 @@
 # ==============================================================================
-#  ESP-LEAF  —  NISSAN LEAF ZE1 CAN MONITOR  —  OPTIMIZED & FIXED HYBRID
+#  ESP-LEAF  —  NISSAN LEAF ZE1 CAN MONITOR
 #  ESP32-C3 Super Mini + SN65HVD230 | TX=GPIO4 | RX=GPIO3 | 500 kbps
 # ==============================================================================
+
+esp32:
+  variant: esp32c3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+api:
+  encryption:
+    key: !secret esp_leaf__key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: LeafCAN
+    password: "12345678"
+
+captive_portal:
+
+logger:
+  level: INFO
 
 esphome:
   name: esp-leaf
@@ -38,30 +63,7 @@ esphome:
           }
         }
 
-esp32:
-  variant: esp32c3
-  flash_size: 4MB
-  framework:
-    type: esp-idf
 
-api:
-  encryption:
-    key: !secret esp_leaf__key
-
-ota:
-  - platform: esphome
-
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  ap:
-    ssid: LeafCAN
-    password: "12345678"
-
-captive_portal:
-
-logger:
-  level: INFO
 
 # ==============================================================================
 # GLOBALS
@@ -508,17 +510,41 @@ canbus:
                 }
               }
 
+      # --------------------------------------------------------------------------
+      # 0x5BC - GIDs and Dashboard Gauge (WITH SCALE SPIKE FILTER)
+      # --------------------------------------------------------------------------
       - can_id: 0x5BC
         use_extended_id: false
         then:
           - lambda: |-
               if (x.size() >= 8) {
                 id(last_can_frame_ms) = millis();
-                const uint16_t gids = (uint16_t) (((x[0] << 2) | (x[1] >> 6)) & 0x3FF);
-                id(gids_sensor).publish_state(gids);
-                if (id(full_capacity_wh) > 10000.0f) {
-                  id(soc_gids_sensor).publish_state((gids * 80.0f / id(full_capacity_wh)) * 100.0f);
+                const uint16_t raw_gids = (uint16_t) (((x[0] << 2) | (x[1] >> 6)) & 0x3FF);
+
+                // --- GIDs Scale Frame Filter ---
+                bool is_valid_gid = false;
+                if (raw_gids > 0 && raw_gids <= 800) {
+                  if (id(last_gids) > 0) {
+                    if (raw_gids == 500 && id(last_gids) < 460) {
+                      is_valid_gid = false;
+                    } else if (abs((int)raw_gids - (int)id(last_gids)) > 40 && raw_gids >= 500) {
+                      is_valid_gid = false;
+                    } else {
+                      is_valid_gid = true;
+                    }
+                  } else if (raw_gids != 500 && raw_gids != 1023) {
+                    is_valid_gid = true;
+                  }
                 }
+
+                if (is_valid_gid) {
+                  id(last_gids) = raw_gids;
+                  id(gids_sensor).publish_state(raw_gids);
+                  if (id(full_capacity_wh) > 10000.0f) {
+                    id(soc_gids_sensor).publish_state((raw_gids * 80.0f / id(full_capacity_wh)) * 100.0f);
+                  }
+                }
+
                 const uint8_t soh = (x[4] >> 1) & 0x7F;
                 id(soh_sensor).publish_state(soh);
                 id(battery_gauge_segment_sensor).publish_state(x[3] * (5.0f / 12.0f));
@@ -1064,7 +1090,7 @@ sensor:
     icon: "mdi:car-battery"
 
   - platform: template
-    name: "Tempo Estimado (QC Carga Rápida)"
+    name: "Estimated Time (Quick Charge)"
     id: charge_time_qc_sensor
     unit_of_measurement: "min"
     state_class: measurement
@@ -1072,7 +1098,7 @@ sensor:
     icon: "mdi:timer-sand"
 
   - platform: template
-    name: "Tempo Estimado (6kW 100%)"
+    name: "Estimated Time (6kW 100%)"
     id: charge_time_6kw_sensor
     unit_of_measurement: "min"
     state_class: measurement
@@ -1080,7 +1106,7 @@ sensor:
     icon: "mdi:timer-sand"
 
   - platform: template
-    name: "Tempo Estimado (3kW 100%)"
+    name: "Estimated Time (3kW 100%)"
     id: charge_time_3kw_sensor
     unit_of_measurement: "min"
     state_class: measurement
