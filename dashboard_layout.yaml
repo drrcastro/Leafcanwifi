@@ -53,7 +53,7 @@ views:
           - type: horizontal-stack
             cards:
               - type: gauge
-                entity: sensor.garagem_leaf_esp_lbc_soc
+                entity: sensor.garagem_leaf_esp_usable_soc
                 name: SOC
                 min: 0
                 max: 100
@@ -77,11 +77,19 @@ views:
               - entity: sensor.garagem_leaf_esp_state_of_health_soh
                 name: SOH (Health)
               - entity: sensor.garagem_leaf_esp_gids
-                name: GIDs
-              - entity: sensor.garagem_leaf_esp_bms_active_balancing_shunts
-                name: Active Balancing Cells (BMS)
+                name: GIDs (remaining x 80 Wh)
+              - entity: sensor.garagem_leaf_esp_soc_gids
+                name: SOC (GIDs)
+              - entity: sensor.garagem_leaf_esp_battery_soc_lbc_group_1
+                name: SOC (LBC group 1)
+              - entity: sensor.garagem_leaf_esp_battery_capacity_ah
+                name: Capacity (Ah)
+              - entity: sensor.garagem_leaf_esp_battery_health_hx
+                name: Health (HX)
               - entity: sensor.garagem_leaf_esp_bms_group_6_active_shunts
                 name: Active Balancing Cells (Group 6)
+              - entity: sensor.garagem_leaf_esp_usable_soc_source
+                name: SOC Source
       - type: grid
         cards:
           - type: heading
@@ -90,13 +98,13 @@ views:
           - type: horizontal-stack
             cards:
               - type: custom:mushroom-entity-card
-                entity: sensor.garagem_leaf_esp_battery_temperature_dash
+                entity: sensor.garagem_leaf_esp_battery_gauge_segment_dash
                 name: Dashboard
                 icon_color: >-
                   {% if
-                  states('sensor.garagem_leaf_esp_battery_temperature_dash')|float
+                  states('sensor.garagem_leaf_esp_battery_gauge_segment_dash')|float
                   > 70 %} red  {% elif
-                  states('sensor.garagem_leaf_esp_battery_temperature_dash')|float
+                  states('sensor.garagem_leaf_esp_battery_gauge_segment_dash')|float
                   > 50 %} orange  {% else %} green {% endif %}
               - type: custom:mushroom-entity-card
                 entity: sensor.garagem_leaf_esp_motor_temperature
@@ -110,6 +118,10 @@ views:
             entities:
               - entity: sensor.garagem_leaf_esp_battery_temperature
                 name: Battery (Average)
+              - entity: sensor.garagem_leaf_esp_battery_pack_temperatures
+                name: Pack Temperatures
+              - entity: sensor.garagem_leaf_esp_battery_temperature_source
+                name: Temperature Source
               - entity: sensor.garagem_leaf_esp_igbt_temperature
                 name: IGBT Module
           - type: heading
@@ -157,9 +169,10 @@ views:
           - type: entities
             entities:
               - entity: sensor.garagem_leaf_esp_obc_max_power
-              - entity: sensor.garagem_leaf_esp_remaining_time_50kw_qc
-              - entity: sensor.garagem_leaf_esp_remaining_time_6kw_wallbox
-              - entity: sensor.garagem_leaf_esp_remaining_time_3kw_plug
+              - entity: sensor.garagem_leaf_esp_remaining_charge_time
+                name: Remaining Charge Time (min)
+              - entity: sensor.garagem_leaf_esp_charge_time_condition
+                name: Charge Time Condition
           - type: heading
             heading: System
             icon: mdi:cog
